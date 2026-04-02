@@ -1,0 +1,30 @@
+# Alpha Engine — Python dependencies
+# Tested on Python 3.10+
+
+# Data
+yfinance>=0.2.36
+
+# Numerical / data
+numpy>=1.24
+pandas>=2.0
+scipy>=1.11
+
+# Machine learning
+scikit-learn>=1.3
+
+# Volatility modelling
+arch>=6.3
+
+# Convex optimisation
+cvxpy>=1.4
+
+# Visualisation
+matplotlib>=3.7
+seaborn>=0.13
+
+# Notebook (optional)
+jupyter>=1.0
+ipykernel>=6.0
+
+# Testing
+pytest>=7.4

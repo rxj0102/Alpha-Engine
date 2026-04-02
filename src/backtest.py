@@ -203,10 +203,24 @@ class StatisticalTests:
         """
         Circular block bootstrap p-value under H₀: Sharpe Ratio = 0.
 
-        Standard i.i.d. bootstrap under-rejects for autocorrelated returns
-        (common in monthly-rebalanced strategies). The circular block bootstrap
-        preserves short-run autocorrelation by sampling contiguous blocks of
-        block_size=21 days (≈ 1 trading month).
+        Why not a standard t-test?
+        --------------------------
+        The SR t-test assumes i.i.d. returns. Monthly-rebalanced strategy
+        returns are autocorrelated (momentum in holdings, regime persistence),
+        so the i.i.d. standard error is downward-biased → the t-test
+        over-rejects H₀ (false positives). Block bootstrap preserves the
+        autocorrelation structure.
+
+        Circular block bootstrap procedure:
+        1. Treat the return series as circular (wrapping around at the end)
+        2. Randomly sample starting indices, take blocks of length b = 21
+        3. Centre each bootstrap sample at zero (enforces H₀: SR = 0)
+        4. Compute bootstrap SR; repeat B = 5000 times
+        5. p-value = fraction of bootstrap SRs ≥ observed SR
+
+        Block size b = 21 ≈ 1 trading month. Politis & Romano (1994) suggest
+        b ∝ T^(1/3) as the optimal rate; for T=1260 this gives b ≈ 11.
+        We use b = 21 to be conservative (preserves more autocorrelation).
 
         Returns
         -------
@@ -240,16 +254,38 @@ class StatisticalTests:
         """
         Deflated Sharpe Ratio (Harvey & Liu 2015).
 
-        Adjusts the Sharpe threshold upward to account for the fact that
-        multiple strategies were tested. A DSR > 1 means the observed Sharpe
-        survives the multiple-testing correction.
+        The problem: if we test N strategy configurations and report the best
+        Sharpe, we are guaranteed to find a large SR by chance even if all
+        strategies have zero true Sharpe. The DSR adjusts the significance
+        threshold upward proportionally to the number of trials.
+
+        The threshold SR under N independent trials is approximated by the
+        expected maximum of N standard normals, scaled by 1/√T:
+
+            E[max SR] ≈ (1-γ)·Φ⁻¹(1 - 1/N) + γ·Φ⁻¹(1 - 1/(N·e))
+
+        where γ = 0.5772 is the Euler-Mascheroni constant. This is the
+        Gumbel approximation to the expected maximum of N i.i.d. normals.
+
+        The threshold is adjusted for non-normality (Harvey & Liu eq. 8):
+
+            SR* = E[max SR]/√T · √(1 - γ₃·SR̂ + (γ₄-1)/4·SR̂²)
+
+        where γ₃ = skewness and γ₄ = excess kurtosis. Negative return skew
+        (common in crisis periods) raises the threshold; positive skew lowers it.
+
+        DSR = observed_SR / SR*. DSR > 1 → the Sharpe is significant even
+        after penalising for the number of configurations tested.
 
         Parameters
         ----------
         n_trials : int
-            Number of strategies/hyperparameter combinations tested.
+            Number of strategy configurations evaluated. In this pipeline,
+            n_trials = number of assets with IC > 0 (each asset's ML model
+            is a separate "trial"). Conservative lower bound: use 1 to skip
+            the penalty entirely; use 50 for a strict test.
         n_obs    : int
-            Number of daily observations in the backtest.
+            Number of daily return observations in the backtest.
         """
         g = 0.5772  # Euler-Mascheroni constant
         E_max = (

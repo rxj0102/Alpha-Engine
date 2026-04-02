@@ -1,19 +1,46 @@
 """
 volatility.py — GJR-GARCH(1,1,1) volatility forecasting with leverage effect.
 
-Model
------
-σ²_t = ω + (α + γ·I[ε_{t-1}<0])·ε²_{t-1} + β·σ²_{t-1}
+Why GJR-GARCH and not standard GARCH?
+--------------------------------------
+Standard GARCH(1,1) treats upside and downside shocks symmetrically:
+    σ²_t = ω + α·ε²_{t-1} + β·σ²_{t-1}
 
-γ > 0 captures the leverage effect: equity volatility rises more sharply
-in response to negative news than to equivalent positive news (Black 1976).
+This is empirically wrong for equities. Black (1976) and Christie (1982)
+documented that equity vol rises more sharply after negative returns than
+after positive returns of equal magnitude — the "leverage effect". GJR-GARCH
+captures this with an asymmetry indicator:
 
-Distribution: Skewed Student-t to accommodate fat tails and asymmetry in
-daily equity returns — more realistic than Gaussian GARCH.
+    σ²_t = ω + (α + γ·I[ε_{t-1}<0])·ε²_{t-1} + β·σ²_{t-1}
 
-Regime detection: A per-asset binary regime (high_vol / low_vol) is derived
-by comparing the current forecast against its own historical percentile.
-The portfolio-level regime aggregates individual asset regimes by majority vote.
+For a negative shock: effective ARCH coefficient = α + γ
+For a positive shock: effective ARCH coefficient = α
+Empirically γ ≈ 0.05–0.15 for SPY, meaning negative shocks have roughly
+1.5–2× the vol impact of equivalent positive shocks.
+
+Key model properties
+--------------------
+Persistence  = α + γ/2 + β
+    Measures the rate of mean-reversion. For equities, persistence ≈ 0.97,
+    implying a half-life of vol shocks of ~23 days (= log(0.5)/log(0.97)).
+    Values above 0.999 indicate near-unit-root vol (IGARCH regime).
+
+Long-run variance  = ω / (1 - persistence)
+    The unconditional variance to which conditional vol reverts.
+    Annualised: √(long_run_var) / 100 * √252.
+
+Distribution: Skewed Student-t
+    The skewness parameter accommodates negative return skew (common in
+    equity ETFs). The degrees-of-freedom parameter captures excess kurtosis.
+    Using Gaussian errors underestimates tail risk in the GARCH likelihood.
+
+Regime detection
+----------------
+Binary regime (high_vol / low_vol) is based on the 75th percentile of the
+in-sample conditional vol history. Using each asset's own history makes
+the threshold adaptive across assets with very different base volatility
+levels (e.g. USO vs. IEF). The portfolio regime is the majority vote across
+all assets with ML views.
 """
 
 import logging

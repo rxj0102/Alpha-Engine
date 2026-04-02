@@ -1,21 +1,54 @@
 """
 ml_alpha.py — Stacked ensemble for cross-sectional return forecasting.
 
-Architecture (two-stage [ML-1])
----------------------------------
-Stage 1  Walk-forward OOF cross-validation
-         Base learners : RandomForest, GradientBoosting, SVR, Ridge
-         Meta-learner  : Ridge trained on OOF base predictions
-         → Unbiased IC / R² / calibration metrics
+Why stacking?
+-------------
+Individual base learners capture different signal structures:
+  - RandomForest    : non-linear interactions, robust to outliers
+  - GradientBoosting: sequential error correction, captures momentum regime-switching
+  - SVR (RBF)       : large-margin regression, effective on standardised features
+  - Ridge           : linear baseline, low variance, high interpretability
 
-Stage 2  Full refit on same training data
-         All base models + meta-learner refitted for deployment
-         → Calibration-consistent inference (avoids retraining bias)
+No single model dominates across market regimes. The Ridge meta-learner learns
+the optimal convex combination from OOF predictions — equivalent to an
+empirical Bayes estimate of the mixing weights.
 
-Alpha metric
------------
-Information Coefficient (IC) = Spearman rank correlation between
-predicted and realised forward returns. IC > 0 → valid view.
+Two-stage protocol [ML-1]
+--------------------------
+The naive stacking approach trains the meta-learner on in-sample base predictions,
+which makes it learn to correct in-sample base-model residuals (a form of
+overfitting). The fix:
+
+  Stage 1 (evaluation): TimeSeriesSplit OOF cross-validation
+    - Each fold trains base models on past data, predicts on future data
+    - Meta-learner trained on these OOF predictions → IC is unbiased
+    - Per-fold StandardScaler prevents any cross-fold leakage
+
+  Stage 2 (deployment): Full refit on the entire training window
+    - Base models retrained on all T observations
+    - Meta-learner retrained on base predictions from the same T observations
+    - This guarantees the deployed model matches the one evaluated in Stage 1
+
+Without Stage 2, we would deploy models trained on ~80% of data (last CV fold),
+creating a systematic discrepancy between reported IC and actual IC.
+
+Information Coefficient and the IC filter
+-----------------------------------------
+IC = Spearman rank correlation (predicted vs. realised returns).
+
+Spearman is used instead of Pearson because:
+  (a) It is robust to extreme return observations (heavy tails)
+  (b) It measures ordinal forecasting skill — the relevant quantity for
+      cross-sectional strategies that rank assets and take long/short baskets
+
+Views are forwarded to Black-Litterman only when IC > 0 (positive predictive
+content). Negative-IC assets are omitted: their ML predictions would be
+anti-correlated with future returns, which the BL model would correctly
+interpret as a negative view — but we have low confidence in the sign of
+our signal uncertainty in those cases.
+
+ICIR = IC / σ(IC) is the per-asset signal Sharpe ratio. An ICIR > 0.5 is
+considered a strong alpha signal in industry practice.
 """
 
 import logging
@@ -85,7 +118,23 @@ class MLAlphaEngine:
 
     @staticmethod
     def _ic(actuals: np.ndarray, preds: np.ndarray) -> float:
-        """Spearman IC — industry-standard alpha quality metric."""
+        """
+        Information Coefficient: Spearman rank correlation(actuals, preds).
+
+        Spearman ρ = Pearson correlation of the rank-transformed series.
+        It is bounded in [-1, 1], equals 1 for perfect rank-preserving forecasts,
+        and is zero under the null of no predictive content.
+
+        Typical empirical IC values:
+          IC < 0.02  : noise (common for individual assets, noisy signals)
+          IC = 0.03–0.05 : usable alpha (industry benchmark for factor models)
+          IC > 0.10  : exceptional (or possibly overfitted — verify with DSR)
+
+        The Fundamental Law (Grinold 1989) links IC to strategy IR:
+          IR ≈ IC · √BR
+        where BR = breadth (independent bets/year). Monthly rebalancing across
+        15 assets gives BR ≈ 180, so IC = 0.04 → IR ≈ 0.54 (pre-cost).
+        """
         return float(stats.spearmanr(actuals, preds).statistic)
 
     def _build_base_models(self):

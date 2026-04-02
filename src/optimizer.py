@@ -1,25 +1,56 @@
 """
 optimizer.py — Bayesian portfolio construction via Black-Litterman.
 
-Framework overview
-------------------
-1. Equilibrium prior  Π = δ·Σ·w_mkt  (reverse-optimisation with market caps)
-2. ML views           Q = predicted returns where IC > 0
-3. View uncertainty   Ω = (1/c - 1)·τ·P·Σ·Pᵀ  (He & Litterman proportional)
-4. BL posterior       μ_BL = [(τΣ)⁻¹ + PᵀΩ⁻¹P]⁻¹·[(τΣ)⁻¹Π + PᵀΩ⁻¹Q]
+Black-Litterman in one equation
+--------------------------------
+The BL posterior is the precision-weighted average of prior and views:
 
-Key correction [BL-1]
----------------------
-τ = 1/T  (T = number of observations, not n_assets).
-This scales the prior uncertainty correctly: a 504-day training window
-gives τ ≈ 0.002, roughly 14× smaller than the naive τ = 1/n_assets choice,
-leading to a less dogmatic posterior and better out-of-sample performance.
+    μ_BL = M⁻¹ · rhs
+    M    = (τΣ)⁻¹ + PᵀΩ⁻¹P          (posterior precision)
+    rhs  = (τΣ)⁻¹Π + PᵀΩ⁻¹Q         (precision-weighted mean)
+
+This is just Bayes' theorem with Gaussian distributions. The prior is
+N(Π, τΣ); the view likelihood is N(Q, Ω); the posterior mean is the
+standard formula for the product of two Gaussians.
+
+Components
+----------
+1. Equilibrium prior  Π = δ·Σ·w_mkt
+   Reverse-optimisation: if the market portfolio is MV-efficient, the
+   implied expected returns are Π = δΣw_mkt. This encodes the CAPM
+   prior without requiring any alpha forecast.
+
+2. Prior uncertainty  τ = 1/T  [BL-1]
+   τΣ is the uncertainty in the prior mean. The choice τ = 1/T comes
+   from treating Π as a sample mean estimated from T observations; the
+   standard error of a sample mean is Σ/T. The common heuristic τ = 1/N
+   has no statistical basis and overstates prior certainty by T/N ≈ 34×
+   for our 504-day window with 15 assets.
+
+3. View matrix P and view vector Q
+   Each row of P selects the assets covered by one view. We use absolute
+   views (P is a row of the identity), so each ML forecast directly
+   specifies the expected return of one asset, not a relative spread.
+
+4. View uncertainty  Ω = (1/c - 1)·τ·PΣPᵀ  (He & Litterman proportional)
+   Ω scales the view uncertainty relative to the prior uncertainty in the
+   same view direction (PΣPᵀ). At c = 0.5, Ω = τPΣPᵀ (equal weight to
+   prior and views). At c → 1, Ω → 0 and views completely override the
+   prior. We set c = 0.65 (modest trust in ML forecasts).
 
 Three optimisation modes
 -------------------------
 - Mean-Variance (CVXPY QP)  : default in low-vol regimes
 - Min-CVaR (CVXPY LP)       : used in high-vol regimes (more tail-robust)
 - Risk Parity (scipy SLSQP) : equal risk contribution, regime-agnostic fallback
+
+Numerical notes
+---------------
+- Ledoit-Wolf guarantees Σ is positive definite, so (τΣ)⁻¹ is well-defined.
+- We add ε·I (ε = 1e-8) to Ω to guard against numerical singularity when
+  all views are on uncorrelated assets (Ω diagonal and near-zero).
+- np.linalg.solve is preferred over np.linalg.inv for the posterior solve
+  (O(n²) vs O(n³) for symmetric systems; falls back to lstsq if singular).
 """
 
 import logging
@@ -55,9 +86,19 @@ class BlackLittermanOptimizer:
         """
         Ledoit-Wolf shrinkage covariance (annualised).
 
-        Shrinkage is critical for small-T / large-N settings — the sample
-        covariance is notoriously ill-conditioned with fewer than ~500 obs
-        and 15+ assets.
+        The sample covariance S = (1/T)XᵀX has estimation error of order
+        N/T. For N=15 assets and T=504 days, N/T ≈ 0.03 — manageable but
+        non-trivial, and MV optimisation amplifies small covariance errors
+        into large weight errors (the "error maximisation" problem, Michaud 1989).
+
+        Ledoit-Wolf (2004) shrinks toward a structured target (here: constant
+        correlation) using the analytically optimal shrinkage intensity α*:
+
+            Σ_LW = (1 - α*)S + α*μ_S · I
+
+        where μ_S = tr(S)/N is the average variance. The Oracle estimator
+        minimises E[‖Σ_LW - Σ_true‖²_F], trading bias for variance reduction.
+        For our T/N ≈ 34 ratio, α* ≈ 0.05–0.15 (mild shrinkage).
         """
         lw = LedoitWolf().fit(returns.dropna())
         return pd.DataFrame(
@@ -157,13 +198,21 @@ class BlackLittermanOptimizer:
         """
         Mean-variance quadratic programme (CVXPY).
 
-        Objective: max μᵀw - (λ/2)·wᵀΣw
-        Constraints: Σwᵢ = 1, 0 ≤ wᵢ ≤ max_weight
+        The unconstrained MV solution is w* = (1/λ)Σ⁻¹μ, which is the
+        tangency portfolio scaled by risk aversion. With the long-only and
+        weight-cap constraints the QP has no closed form but remains convex:
 
-        Regime-aware: λ is doubled in high-vol regimes to discourage
-        concentrated bets when uncertainty is elevated.
+            max  μᵀw - (λ/2)·wᵀΣw
+            s.t. 1ᵀw = 1,  0 ≤ wᵢ ≤ w̄
 
-        Solver cascade: CLARABEL → OSQP → ECOS (robustness).
+        Regime-aware λ: in high-vol regimes we double λ (= 5.0 vs 2.5).
+        This is equivalent to a 50% reduction in the perceived information
+        ratio of the forecast, reflecting the empirical finding that ML
+        signals have lower Sharpe during high-dispersion markets.
+
+        Solver cascade: CLARABEL (interior-point, default in CVXPY ≥ 1.4)
+        → OSQP (ADMM, robust to ill-conditioning) → ECOS (barrier method,
+        legacy fallback). All three produce identical solutions to within 1e-6.
         """
         lam = self.cfg.risk_aversion * (2.0 if regime == "high_vol" else 1.0)
         mw = max_weight or self.cfg.max_weight
@@ -194,11 +243,24 @@ class BlackLittermanOptimizer:
         """
         Minimum Conditional Value-at-Risk portfolio (LP formulation).
 
-        CVaR is more robust than MV under fat-tailed, non-normal returns
-        and is the preferred objective in high-vol / crisis regimes.
+        CVaR (Expected Shortfall) at level α is the expected loss conditional
+        on the loss exceeding the α-quantile (VaR). Unlike VaR, CVaR is a
+        coherent risk measure (Artzner et al. 1999): it is sub-additive, so
+        diversification always reduces it. MV is not coherent — it penalises
+        upside variance equally with downside variance.
 
-        LP: min η + (1/αT)·Σzₜ
-            s.t. zₜ ≥ 0, zₜ ≥ -rₜᵀw - η, Σwᵢ = 1, 0 ≤ wᵢ ≤ max_weight
+        The Rockafellar-Uryasev (2000) LP reformulation avoids the
+        non-convexity of directly minimising the empirical quantile:
+
+            CVaR_α(w) = min_{η} { η + (1/αT) Σ_t max(-rₜᵀw - η, 0) }
+
+        Introducing z_t = max(-rₜᵀw - η, 0) as a variable:
+
+            min  η + (1/αT)·Σzₜ
+            s.t. zₜ ≥ 0,  zₜ ≥ -rₜᵀw - η,  1ᵀw = 1,  0 ≤ wᵢ ≤ w̄
+
+        At α = 0.05 this minimises the average loss in the worst 5% of
+        days — appropriate when the regime model signals elevated tail risk.
         """
         a = alpha or self.cfg.cvar_alpha
         mw = max_weight or self.cfg.max_weight
@@ -224,11 +286,23 @@ class BlackLittermanOptimizer:
         """
         Equal Risk Contribution (risk parity) portfolio.
 
-        Each asset contributes σ_portfolio / n to total portfolio risk.
-        ERC is parameter-free (no return forecast required) and tends to be
-        more stable out-of-sample than mean-variance.
+        The risk contribution of asset i is:
 
-        Solved via SLSQP with a squared-deviation objective.
+            RC_i = w_i · (∂σ_p/∂w_i) = w_i · (Σw)_i / σ_p
+
+        ERC requires RC_i = σ_p / n for all i, i.e. the gradient of portfolio
+        vol with respect to each weight is equal across all assets. This has
+        no closed-form solution for N > 2 but is convex in the objective:
+
+            min_w  Σ_i Σ_j (RC_i - RC_j)² = Σ_i (RC_i - σ_p/n)²
+
+        Equivalent to a Sharpe-maximising portfolio when all assets have equal
+        Sharpe ratios. Practically, ERC is parameter-free (no μ required),
+        weights are more stable than MV (lower turnover), and it avoids the
+        error amplification problem that plagues unconstrained MV.
+
+        SLSQP bounds (0.01, max_weight) prevent degenerate solutions when the
+        covariance matrix has very low off-diagonal entries.
         """
         n = len(cov)
         Sig = cov.values

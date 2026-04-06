@@ -71,11 +71,11 @@ class TestBacktesterRun:
         assert (ph["portfolio_value"] > 0).all()
 
     def test_transaction_costs_reduce_value(self):
-        """With very high transaction costs, final portfolio should be lower."""
-        from src.config import BID_ASK_SPREAD
-        bt_no_cost = PortfolioBacktester(100_000)
-        bt_no_cost.COMMISSION = 0.0  # type: ignore
+        """With constant weights there is still turnover at each rebalance.
 
+        The backtester should remain solvent (positive portfolio value) even
+        after deducting realistic transaction costs every period.
+        """
         np.random.seed(0)
         n = 60
         dates = pd.date_range("2022-01-01", periods=n, freq="B")
@@ -86,8 +86,7 @@ class TestBacktesterRun:
 
         bt = PortfolioBacktester(100_000)
         ph = bt.run(prices_small, wts, freq="W")
-        # With turnover and costs, should not exceed no-cost scenario
-        assert ph["portfolio_value"].iloc[-1] > 0  # sanity
+        assert ph["portfolio_value"].iloc[-1] > 0  # costs must not bankrupt the portfolio
 
 
 # ── Tests: PortfolioBacktester.metrics ────────────────────────────────────────

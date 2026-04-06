@@ -166,6 +166,9 @@ class VolatilityEngine:
         str
             'high_vol' or 'low_vol'
         """
+        if ticker not in self._hist_vol:
+            log.warning("regime() called for unfitted ticker %s; defaulting to low_vol", ticker)
+            return "low_vol"
         hist = self._hist_vol[ticker]
         threshold = np.percentile(hist[~np.isnan(hist)], pct)
         current = float(np.mean(self.forecasts[ticker]))

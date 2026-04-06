@@ -206,7 +206,10 @@ class MLAlphaEngine:
 
         oof_ic = self._ic(meta_y_oof, oof_preds)
         oof_r2 = r2_score(meta_y_oof, oof_preds)
-        cal_slope = float(np.polyfit(meta_y_oof, oof_preds, 1)[0])
+        try:
+            cal_slope = float(np.polyfit(meta_y_oof, oof_preds, 1)[0])
+        except (np.linalg.LinAlgError, ValueError):
+            cal_slope = np.nan
 
         # Stage 2: Full refit — base models and meta-learner on same data [ML-1]
         final_scaler = StandardScaler()

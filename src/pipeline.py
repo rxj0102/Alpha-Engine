@@ -141,8 +141,11 @@ def run_walk_forward(cfg: Config = None) -> Dict:
             except Exception:
                 pass
 
-        n_high = sum(r == "high_vol" for r in regimes.values())
-        portfolio_regime = "high_vol" if n_high > len(regimes) / 2 else "low_vol"
+        if regimes:
+            n_high = sum(r == "high_vol" for r in regimes.values())
+            portfolio_regime = "high_vol" if n_high > len(regimes) / 2 else "low_vol"
+        else:
+            portfolio_regime = "low_vol"
 
         # D. BL optimisation
         selected = [t for t in ml_views if t in train_returns.columns]

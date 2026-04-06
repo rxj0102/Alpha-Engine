@@ -167,7 +167,7 @@ class DataEngine:
             macd = ema12 - ema26
             f["macd"] = macd
             f["macd_hist"] = macd - macd.ewm(span=9, adjust=False).mean()
-            f["bb_width"] = 2 * r.rolling(20).std() / (sma20 / p)
+            f["bb_width"] = 4 * p.rolling(20).std() / sma20
 
             # Wilder RSI: com=13 ≡ span=27, matching Wilder's original smoothing constant
             gain = r.where(r > 0, 0.0).ewm(com=13, adjust=False).mean()

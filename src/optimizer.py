@@ -169,7 +169,10 @@ class BlackLittermanOptimizer:
 
         # He & Litterman proportional view uncertainty
         Omega = (1.0 / max(c, 1e-4) - 1.0) * tau * (P @ cov.values @ P.T) + np.eye(n_views) * 1e-8
-        tau_sig_inv = np.linalg.inv(tau * cov.values + np.eye(n_assets) * 1e-8)
+        try:
+            tau_sig_inv = np.linalg.inv(tau * cov.values + np.eye(n_assets) * 1e-8)
+        except np.linalg.LinAlgError:
+            tau_sig_inv = np.linalg.pinv(tau * cov.values + np.eye(n_assets) * 1e-8)
 
         try:
             Omega_inv = np.linalg.inv(Omega)
@@ -309,6 +312,8 @@ class BlackLittermanOptimizer:
 
         def objective(w):
             vol = np.sqrt(w @ Sig @ w)
+            if vol < 1e-10:
+                return 1e10  # degenerate portfolio; penalise heavily
             rc = w * (Sig @ w) / vol
             return np.sum((rc - vol / n) ** 2)
 

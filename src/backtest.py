@@ -55,9 +55,13 @@ class PortfolioBacktester:
     # ── Internal helpers ───────────────────────────────────────────────────
 
     def _tcost(self, ticker: str, notional: float) -> float:
-        """Round-trip transaction cost: half spread + commission."""
+        """Round-trip transaction cost: half spread + commission.
+
+        BID_ASK_SPREAD values are already *half* spreads (one-way cost), so we
+        add them directly to commission rather than halving again.
+        """
         spread = BID_ASK_SPREAD.get(ticker, 8e-4)
-        return notional * (spread / 2 + COMMISSION)
+        return notional * (spread + COMMISSION)
 
     @staticmethod
     def _rebalance_dates(index: pd.DatetimeIndex, freq: str = "ME") -> set:
@@ -171,7 +175,9 @@ class PortfolioBacktester:
 
         if benchmark is not None:
             b = benchmark.reindex(ret.index).dropna()
-            beta = float(np.cov(ret.reindex(b.index), b)[0, 1] / b.var())
+            ret_b = ret.reindex(b.index).dropna()
+            b = b.reindex(ret_b.index)
+            beta = float(np.cov(ret_b.values, b.values)[0, 1] / b.var())
             alpha = float(ann_ret - beta * b.mean() * 252)
             result.update({"Beta": f"{beta:.3f}", "Alpha (ann.)": f"{alpha:.2%}"})
 

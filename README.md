@@ -159,7 +159,7 @@ Backtested **2020-01-01 – 2024-12-31** across the COVID crash (-34% SPY drawdo
 
 **Statistical validation:**
 - [x] Block-bootstrap p-value < 0.05 — `SR=0.460, p=0.000` (H₀: SR = 0, B = 5,000, block = 21d) ✓
-- [ ] Deflated Sharpe Ratio > 1.0 — `DSR=0.368, threshold=1.251` ✗ Fails (n_trials = 15)
+- [ ] Deflated Sharpe Ratio > 1.0 — `DSR=0.368, threshold=1.251` ✗ Fails (n_trials = 15). *Computed before the variance-inflation term was corrected (per-period SR, raw kurtosis); rerun the notebook to refresh this figure.*
 - [x] Mean IC significantly > 0 — `mean_IC=0.4432, ICIR=2.570, p=0.000` ✓
 
 > **DSR note:** The DSR threshold rises steeply with the number of configurations tested. With n_trials = 15 (one per asset), the penalty is severe. The block-bootstrap and per-asset IC tests both clear significance at 5%, and the DSR failure reflects the conservative multiple-testing correction rather than a spurious Sharpe.

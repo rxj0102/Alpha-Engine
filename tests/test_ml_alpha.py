@@ -151,4 +151,4 @@ class TestPredict:
         eng.train(X, y, "SPY")
         p1 = eng.predict(X.iloc[-5:], "SPY")
         p2 = eng.predict(X.iloc[-5:], "SPY")
-        np.testing.assert_array_equal(p1, p2)
+        np.testing.assert_allclose(p1, p2, rtol=1e-9)

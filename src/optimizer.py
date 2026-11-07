@@ -317,9 +317,13 @@ class BlackLittermanOptimizer:
             rc = w * (Sig @ w) / vol
             return np.sum((rc - vol / n) ** 2)
 
+        # If n * max_weight < 1 the weights cannot sum to 1 under the cap, so the
+        # problem is infeasible and SLSQP would fall back to equal weights.
+        # Drop the cap in that case (only happens with very few assets).
+        ub = self.cfg.max_weight if n * self.cfg.max_weight >= 1.0 else 1.0
         res = minimize(
             objective, np.ones(n) / n, method="SLSQP",
-            bounds=[(0.01, self.cfg.max_weight)] * n,
+            bounds=[(0.01, ub)] * n,
             constraints=[{"type": "eq", "fun": lambda w: w.sum() - 1}],
             options={"ftol": 1e-12, "maxiter": 500},
         )

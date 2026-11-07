@@ -299,15 +299,17 @@ class StatisticalTests:
             + g * stats.norm.ppf(1 - 1 / (n_trials * np.e))
         ) if n_trials > 1 else 0.0
 
-        thr_ann = (
-            E_max / np.sqrt(n_obs)
-            * np.sqrt(
-                1
-                - skewness * observed_sharpe
-                + (excess_kurtosis - 1) / 4 * observed_sharpe ** 2
-            )
-            * np.sqrt(252)
+        # The variance-inflation factor uses the per-period Sharpe ratio and the
+        # raw (not excess) kurtosis: 1 - skew*SR + (kurt - 1)/4 * SR^2, with
+        # kurt = excess_kurtosis + 3 (Mertens 2002). Using the annualised SR and
+        # excess kurtosis made the radicand negative for SR > 2 (NaN threshold).
+        sr_per = observed_sharpe / np.sqrt(252)
+        infl = (
+            1
+            - skewness * sr_per
+            + (excess_kurtosis + 3 - 1) / 4 * sr_per ** 2
         )
+        thr_ann = E_max / np.sqrt(n_obs) * np.sqrt(max(infl, 1e-12)) * np.sqrt(252)
         dsr = observed_sharpe / max(thr_ann, 1e-10)
         return {"DSR": dsr, "sr_threshold_ann": thr_ann, "passes_dsr": dsr > 1.0}
 

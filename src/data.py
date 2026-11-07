@@ -40,7 +40,13 @@ class DataEngine:
             s = raw.get(("Close", ticker),
                         raw["Close"].iloc[:, 0] if "Close" in cols.get_level_values(0) else None)
         else:
-            s = raw.get("Close") or raw.get("Adj Close") or raw.iloc[:, 0]
+            s = None
+            for col in ("Close", "Adj Close"):
+                if col in raw.columns:
+                    s = raw[col]
+                    break
+            if s is None:
+                s = raw.iloc[:, 0]
         s = s.squeeze() if isinstance(s, pd.DataFrame) else s
         return s if isinstance(s, pd.Series) and not s.empty else None
 

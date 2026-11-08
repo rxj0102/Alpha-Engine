@@ -17,7 +17,7 @@ The most common flaw in published ML-finance backtests is feature engineering pe
 A stacked meta-learner trained on the same data as its base models learns to correct in-sample base-model residuals, not genuine out-of-sample errors. The fix is a two-stage protocol: the meta-learner is first fitted on out-of-fold (OOF) base predictions (yielding unbiased IC/R² estimates), then both base models and the meta-learner are refitted on the full training window before deployment. `[ML-1]`
 
 **3. Mis-scaled Black-Litterman prior uncertainty.**
-The standard practitioner implementation sets `τ = 1/n_assets` — a heuristic with no statistical justification. The theoretically correct choice (Idzorek 2005, He & Litterman 1999) is `τ = 1/T`, where `T` is the number of observations. For a 504-day training window and 15 assets, this correction shifts `τ` by a factor of ~34×, producing a substantially less dogmatic posterior and materially different allocations. `[BL-1]`
+The standard practitioner implementation sets `τ = 1/n_assets` - a heuristic with no statistical justification. The theoretically correct choice (Idzorek 2005, He & Litterman 1999) is `τ = 1/T`, where `T` is the number of observations. For a 504-day training window and 15 assets, this correction shifts `τ` by a factor of ~34×, producing a substantially less dogmatic posterior and materially different allocations. `[BL-1]`
 
 ---
 
@@ -26,7 +26,7 @@ The standard practitioner implementation sets `τ = 1/n_assets` — a heuristic 
 ### Pipeline
 
 ```
-Market Data (15 ETFs, 2020–2024)
+Market Data (15 ETFs, 2020-2024)
          │
          ▼
   Feature Engineering          [WF-1] cutoff_date enforced per rebalance
@@ -51,7 +51,7 @@ Market Data (15 ETFs, 2020–2024)
          └── high-vol regime → Min-CVaR LP         (α = 5%, tail-robust)
          │
          ▼
-  Event-driven Backtest        Per-ticker bid-ask (3–10 bps) + 5 bps commission
+  Event-driven Backtest        Per-ticker bid-ask (3-10 bps) + 5 bps commission
   Monthly rebalance            Turnover computed on actual trading-day calendar
          │
          ▼
@@ -66,7 +66,7 @@ Market Data (15 ETFs, 2020–2024)
 | Component | Choice | Why not the alternative |
 |---|---|---|
 | Feature cutoff | `cutoff_date` per rebalance | Full-sample features leak future vol/momentum |
-| ML stacking | OOF meta-learner then full refit | In-sample stacking inflates IC by ~0.05–0.15 |
+| ML stacking | OOF meta-learner then full refit | In-sample stacking inflates IC (magnitude not measured here) |
 | Covariance | Ledoit-Wolf shrinkage | Sample covariance is rank-deficient at T=504, N=15 |
 | τ scaling | `1/T`, not `1/N` | `1/N` overstates prior certainty by a factor of T/N ≈ 34 |
 | Vol model | GJR-GARCH (not GARCH) | Captures leverage effect; standard GARCH underestimates equity downside vol |
@@ -94,11 +94,11 @@ The BL model treats return estimation as a Bayesian inference problem. The prior
 $$\mu_{BL} = \bigl[(\tau\Sigma)^{-1} + P^\top\Omega^{-1}P\bigr]^{-1} \bigl[(\tau\Sigma)^{-1}\Pi + P^\top\Omega^{-1}Q\bigr]$$
 
 where:
-- $\Pi = \delta\Sigma w_{mkt}$ — reverse-optimised equilibrium returns
-- $\tau = 1/T$ — prior uncertainty scaling (correction `[BL-1]`)
-- $P$ — view pick matrix (identity rows for absolute views)
-- $Q$ — ML-predicted returns (filtered to IC > 0 assets only)
-- $\Omega = \left(\frac{1}{c} - 1\right)\tau P\Sigma P^\top$ — He & Litterman proportional uncertainty
+- $\Pi = \delta\Sigma w_{mkt}$ - reverse-optimised equilibrium returns
+- $\tau = 1/T$ - prior uncertainty scaling (correction `[BL-1]`)
+- $P$ - view pick matrix (identity rows for absolute views)
+- $Q$ - ML-predicted returns (filtered to IC > 0 assets only)
+- $\Omega = \left(\frac{1}{c} - 1\right)\tau P\Sigma P^\top$ - He & Litterman proportional uncertainty
 
 As $T \to \infty$, $\tau \to 0$ and $\mu_{BL} \to \Pi$ (prior dominates). As view confidence $c \to 1$, $\Omega \to 0$ and $\mu_{BL} \to Q$ (views dominate).
 
@@ -108,7 +108,7 @@ Standard GARCH treats positive and negative shocks symmetrically. GJR-GARCH adds
 
 $$\sigma^2_t = \omega + \underbrace{(\alpha + \gamma\,\mathbf{1}[\varepsilon_{t-1}<0])}_{\text{news impact}} \varepsilon^2_{t-1} + \beta\sigma^2_{t-1}$$
 
-$\gamma > 0$ (empirically 0.05–0.15 for equity ETFs) means negative surprises amplify conditional variance more than equivalent positive surprises — the well-documented leverage effect (Black 1976, Christie 1982). Persistence $= \alpha + \tfrac{1}{2}\gamma + \beta$; values near 1 indicate slow mean-reversion (typical for equities). Long-run variance $= \omega / (1 - \text{persistence})$.
+$\gamma > 0$ (empirically 0.05-0.15 for equity ETFs) means negative surprises amplify conditional variance more than equivalent positive surprises - the well-documented leverage effect (Black 1976, Christie 1982). Persistence $= \alpha + \tfrac{1}{2}\gamma + \beta$; values near 1 indicate slow mean-reversion (typical for equities). Long-run variance $= \omega / (1 - \text{persistence})$.
 
 ### Min-CVaR as a coherent risk measure
 
@@ -120,7 +120,7 @@ where $\eta$ is the VaR and $z_t$ are auxiliary loss variables. This is used in 
 
 ### Information Coefficient and the Fundamental Law
 
-The Information Coefficient (IC) is the Spearman rank correlation between predicted and realised forward returns. Spearman is used instead of Pearson because it is robust to outliers and measures ordinal forecasting skill — what matters for cross-sectional ranking strategies. The ICIR = IC / σ(IC) is the per-asset analogue of the Sharpe ratio for the alpha signal.
+The Information Coefficient (IC) is the Spearman rank correlation between predicted and realised forward returns. Spearman is used instead of Pearson because it is robust to outliers and measures ordinal forecasting skill - what matters for cross-sectional ranking strategies. The ICIR = IC / σ(IC) is the per-asset analogue of the Sharpe ratio for the alpha signal.
 
 Grinold's Fundamental Law of Active Management connects IC to strategy value:
 
@@ -140,7 +140,7 @@ where $\hat{E}[\max SR]$ is the expected maximum Sharpe across $N$ trials (appro
 
 ## Results
 
-Backtested **2020-01-01 – 2024-12-31** across the COVID crash (-34% SPY drawdown), 2022 rate shock (-18% SPY), and 2023–24 recovery — a stress-test that covers three distinct macro regimes.
+Backtested **2020-01-01 - 2024-12-31** across the COVID crash (-34% SPY drawdown), 2022 rate shock (-18% SPY), and 2023-24 recovery - a stress-test that covers three distinct macro regimes.
 
 | Metric | ML + BL Strategy | BL-only (ablation) | SPY (benchmark) |
 |---|---|---|---|
@@ -150,34 +150,23 @@ Backtested **2020-01-01 – 2024-12-31** across the COVID crash (-34% SPY drawdo
 | Sortino Ratio | **0.537** | 0.386 | 0.803 |
 | Max Drawdown | **-28.89%** | -28.89% | -33.93% |
 | Beta | 0.576 | 0.599 | 1.000 |
-| Alpha (ann.) | **+1.69%** | -0.59% | — |
+| Alpha (ann.) | **+1.69%** | -0.59% | - |
 
 > Results from `06_alpha_engine.ipynb` run on real market data (yfinance, adjusted close). Ann. Return is arithmetic (μ × 252) consistent across all columns. SPY statistics are computed from the same benchmark return series used to derive Beta and Alpha. The ablation column removes ML views while keeping BL + GARCH + CVaR identical, isolating the ML contribution.
 
-**Key takeaways:**
-- ML views add **+1.91% annual return** and **+0.131 Sharpe** over BL-only.
-- Multi-asset diversification reduces volatility (-25% vs SPY) and max drawdown (-5pp vs SPY), at the cost of lower raw return in the strong 2021–24 equity bull market.
-- Beta of 0.576 confirms meaningful equity risk reduction; Alpha of +1.69% is statistically significant (p < 0.001).
+> **Status of these numbers.** The table above was produced before the cross-validation purge fix (see Corrections below) and has not been regenerated, so treat it as a historical run, not a verified result. Re-run `notebooks/alpha_engine.ipynb` or `06_alpha_engine.ipynb` with live data to refresh it.
 
-**Statistical validation:**
-- [x] Block-bootstrap p-value < 0.05 — `SR=0.460, p=0.000` (H₀: SR = 0, B = 5,000, block = 21d) ✓
-- [ ] Deflated Sharpe Ratio > 1.0 — `DSR=0.368, threshold=1.251` ✗ Fails (n_trials = 15). *Computed before the variance-inflation term was corrected (per-period SR, raw kurtosis); rerun the notebook to refresh this figure.*
-- [x] Mean IC significantly > 0 — `mean_IC=0.4432, ICIR=2.570, p=0.000` ✓
+Reading the table as it stands: the strategy has lower volatility and drawdown than SPY, but a lower Sharpe ratio (0.460 vs 0.597) and lower return over this bull-market sample. The ML views added about 0.13 Sharpe over the BL-only ablation in this one run, with no significance test that survives the issues below.
 
-> **DSR note:** The DSR threshold rises steeply with the number of configurations tested. With n_trials = 15 (one per asset), the penalty is severe. The block-bootstrap and per-asset IC tests both clear significance at 5%, and the DSR failure reflects the conservative multiple-testing correction rather than a spurious Sharpe.
+**Statistical validation: not currently valid.**
+- Block-bootstrap Sharpe test: reported p = 0.000 for SR = 0.460. Not regenerated since the fix.
+- Deflated Sharpe Ratio: reported DSR = 0.368 against a threshold of 1.251, which fails with n_trials = 15. This figure also predates a variance-inflation correction. The conclusion is that the Sharpe is not distinguishable from a multiple-testing null.
+- Information coefficient: the earlier report of a mean IC of 0.44 with p = 0.000 is withdrawn. An IC that high for monthly ETF returns is implausible (honest values are typically 0.02 to 0.05), and the test was invalid for three reasons: (1) the 21-day forward-return labels overlap and the CV had no purge gap, so training labels leaked into test folds; (2) each IC is a pooled time-series Spearman over about four years, dominated by a few regimes, not a cross-sectional IC; (3) the t-test across the 15 per-asset ICs treats highly correlated assets as independent.
+- The per-asset IC table has been removed for the same reasons.
 
-**Per-asset IC significance** (all 15 assets, mean IC range 0.406–0.548, all p < 0.001):
+## Corrections
 
-| Asset | mean IC | ICIR | Asset | mean IC | ICIR |
-|---|---|---|---|---|---|
-| SPY | 0.440 | 2.77 | XLI | 0.507 | 2.88 |
-| QQQ | 0.422 | 2.90 | TLT | 0.483 | 3.36 |
-| IWM | 0.467 | 2.40 | IEF | 0.516 | 3.47 |
-| EFA | 0.505 | 3.24 | LQD | 0.526 | 3.39 |
-| EEM | 0.522 | 3.49 | GLD | 0.487 | 3.67 |
-| XLF | 0.508 | 3.34 | USO | 0.516 | 3.96 |
-| XLE | 0.453 | 3.04 | — | — | — |
-| XLK | 0.406 | 2.44 | XLV | 0.548 | 3.65 |
+- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test. Results need a re-run to see the post-fix IC.
 
 ---
 
@@ -185,15 +174,15 @@ Backtested **2020-01-01 – 2024-12-31** across the COVID crash (-34% SPY drawdo
 
 These are concrete next steps, not wishlist items. Each is tractable within the existing architecture.
 
-### Extension 1 — Turnover-penalised mean-variance
+### Extension 1 - Turnover-penalised mean-variance
 
 The current MV objective ignores rebalancing costs. A quadratic turnover penalty transforms the problem into:
 
 $$\max_w\; \mu^\top w - \frac{\lambda}{2} w^\top \Sigma w - \kappa \|w - w_{\text{prev}}\|_1$$
 
-where $\kappa$ is a cost coefficient (set to ~10 bps × annualisation). This is still a convex QP solvable with CVXPY. Empirically, turnover penalties reduce gross-to-net Sharpe degradation by 30–60% in monthly-rebalanced strategies. Implementation: add `w_prev` as a parameter to `optimize_mv()` and extend the CVXPY constraint set.
+where $\kappa$ is a cost coefficient (set to ~10 bps × annualisation). This is still a convex QP solvable with CVXPY. Implementation: add `w_prev` as a parameter to `optimize_mv()` and extend the CVXPY constraint set.
 
-### Extension 2 — Kalman filter view updating
+### Extension 2 - Kalman filter view updating
 
 Current ML views are generated monthly and held constant until the next rebalance. A state-space model allows continuous updating: let $\mu_t = \mu_{t-1} + w_t$ (random walk prior), and treat each day's cross-sectional prediction as a noisy observation $y_t = H\mu_t + v_t$. The Kalman update is:
 
@@ -201,7 +190,7 @@ $$\mu_{t|t} = \mu_{t|t-1} + K_t(y_t - H\mu_{t|t-1}), \quad K_t = P_{t|t-1}H^\top
 
 This replaces the discrete monthly view refresh with a continuous posterior update that decays stale signals exponentially. The noise ratio $Q/R$ controls how quickly views are updated versus held. This is the natural probabilistic extension of the BL framework and corresponds to treating the ML model as a measurement equation.
 
-### Extension 3 — Statistical factor model covariance
+### Extension 3 - Statistical factor model covariance
 
 Ledoit-Wolf works well for N ≤ 20, but a factor model is both more interpretable and more scalable. Decompose:
 
@@ -289,12 +278,12 @@ jupyter notebook notebooks/alpha_engine.ipynb
 
 ## References
 
-- Black, F. & Litterman, R. (1992). Global portfolio optimisation. *Financial Analysts Journal*, 48(5), 28–43.
+- Black, F. & Litterman, R. (1992). Global portfolio optimisation. *Financial Analysts Journal*, 48(5), 28-43.
 - He, G. & Litterman, R. (1999). The intuition behind Black-Litterman model portfolios. *Goldman Sachs Investment Management Research*.
 - Idzorek, T. (2005). A step-by-step guide to the Black-Litterman model. *Zephyr Associates Working Paper*.
-- Glosten, L., Jagannathan, R. & Runkle, D. (1993). On the relation between the expected value and the volatility of the nominal excess return on stocks. *Journal of Finance*, 48(5), 1779–1801.
-- Rockafellar, R. T. & Uryasev, S. (2000). Optimization of conditional value-at-risk. *Journal of Risk*, 2(3), 21–41.
-- Harvey, C. R. & Liu, Y. (2015). Backtesting. *Journal of Portfolio Management*, 42(1), 13–28.
-- Ledoit, O. & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365–411.
-- Grinold, R. (1989). The fundamental law of active management. *Journal of Portfolio Management*, 15(3), 30–37.
-- Artzner, P., Delbaen, F., Eber, J.-M. & Heath, D. (1999). Coherent measures of risk. *Mathematical Finance*, 9(3), 203–228.
+- Glosten, L., Jagannathan, R. & Runkle, D. (1993). On the relation between the expected value and the volatility of the nominal excess return on stocks. *Journal of Finance*, 48(5), 1779-1801.
+- Rockafellar, R. T. & Uryasev, S. (2000). Optimization of conditional value-at-risk. *Journal of Risk*, 2(3), 21-41.
+- Harvey, C. R. & Liu, Y. (2015). Backtesting. *Journal of Portfolio Management*, 42(1), 13-28.
+- Ledoit, O. & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365-411.
+- Grinold, R. (1989). The fundamental law of active management. *Journal of Portfolio Management*, 15(3), 30-37.
+- Artzner, P., Delbaen, F., Eber, J.-M. & Heath, D. (1999). Coherent measures of risk. *Mathematical Finance*, 9(3), 203-228.

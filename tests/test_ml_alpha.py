@@ -152,3 +152,23 @@ class TestPredict:
         p1 = eng.predict(X.iloc[-5:], "SPY")
         p2 = eng.predict(X.iloc[-5:], "SPY")
         np.testing.assert_allclose(p1, p2, rtol=1e-9)
+
+
+def test_cv_purges_horizon_rows_between_train_and_test(monkeypatch):
+    """Overlapping h-day labels must not leak across the train/test boundary."""
+    import src.ml_alpha as ml
+
+    seen = {}
+    real = ml.TimeSeriesSplit
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ml, "TimeSeriesSplit", spy)
+    cfg = MLConfig()
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(rng.normal(size=(400, 4)), columns=list("abcd"))
+    y = pd.Series(rng.normal(size=400))
+    MLAlphaEngine(cfg).train(X, y, "TEST")
+    assert seen.get("gap") == cfg.horizon

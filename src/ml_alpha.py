@@ -179,7 +179,9 @@ class MLAlphaEngine:
             {"IC": float, "r2": float, "calibration_slope": float}
         """
         n = len(X)
-        tscv = TimeSeriesSplit(n_splits=self.cfg.n_cv_splits)
+        # gap=horizon purges the last h training rows, whose h-day forward-return
+        # labels overlap the start of the test fold (label leakage otherwise).
+        tscv = TimeSeriesSplit(n_splits=self.cfg.n_cv_splits, gap=self.cfg.horizon)
         base_models = self._build_base_models()
 
         oof = {name: np.full(n, np.nan) for name, _ in base_models}

@@ -24,6 +24,7 @@ A dict containing:
   - port_rets          : daily strategy return series
 """
 
+import math
 import logging
 from typing import Dict, List, Optional
 
@@ -38,6 +39,11 @@ from src.optimizer import BlackLittermanOptimizer
 from src.volatility import VolatilityEngine
 
 log = logging.getLogger(__name__)
+
+
+def min_assets(max_weight: float) -> int:
+    """Smallest universe for which sum(w) = 1, 0 <= w <= max_weight is feasible."""
+    return max(3, math.ceil(1.0 / max_weight - 1e-9))
 
 
 def run_walk_forward(cfg: Config = None) -> Dict:
@@ -88,6 +94,9 @@ def run_walk_forward(cfg: Config = None) -> Dict:
     ablation_record: Dict = {}
     ml_metrics_all: Dict = {}
     ic_history: Dict[str, list] = {t: [] for t in universe}
+    # Latest metrics for every trained asset, not only those passing the IC gate;
+    # testing only the gated assets would select on the outcome.
+    latest_ic_all: Dict = {}
 
     for i, reb_date in enumerate(reb_dates):
         loc = prices.index.get_loc(reb_date)
@@ -120,6 +129,7 @@ def run_walk_forward(cfg: Config = None) -> Dict:
             try:
                 m = ml_eng.train(X, y, t)
                 ic_history[t].append(m["IC"])
+                latest_ic_all[t] = m
                 if m["IC"] > 0:
                     ml_views[t] = float(ml_eng.predict(X.iloc[-1:], t)[0])
                     ml_metrics_all[t] = m
@@ -151,7 +161,10 @@ def run_walk_forward(cfg: Config = None) -> Dict:
         selected = [t for t in ml_views if t in train_returns.columns]
 
         def _optimize(use_ml_views: bool) -> pd.Series:
-            if len(selected) < 3:
+            # Fully invested with every weight <= max_weight needs at least
+            # ceil(1 / max_weight) assets; with 3 assets and a 30% cap the
+            # problem is infeasible and the solver fell back to 33% each.
+            if len(selected) < min_assets(opt_cfg.max_weight):
                 return pd.Series(1 / len(universe), index=universe)
             try:
                 bl = BlackLittermanOptimizer(cfg=opt_cfg)
@@ -227,7 +240,7 @@ def run_walk_forward(cfg: Config = None) -> Dict:
 
     # ── Statistical validation ─────────────────────────────────────────────
     port_rets = ph["portfolio_value"].pct_change().dropna()
-    StatisticalTests.report(ph, ml_metrics_all, n_trials=max(len(ml_metrics_all), 1),
+    StatisticalTests.report(ph, latest_ic_all, n_trials=len(universe),
                             rf=opt_cfg.risk_free_rate)
 
     print("\n  Per-asset IC significance:")

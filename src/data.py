@@ -115,6 +115,10 @@ class DataEngine:
                 pass
 
         if not caps:
+            # Yahoo publishes no share count or market cap for ETFs, so for the
+            # default universe this branch is always taken: the BL prior is
+            # equal-weighted, not market-cap weighted.
+            log.warning("No market caps available; using an equal-weight BL prior")
             return pd.Series(1.0, index=tickers)
 
         s = pd.Series(caps)

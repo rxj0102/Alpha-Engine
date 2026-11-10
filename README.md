@@ -14,7 +14,7 @@ This project addresses three specific, well-documented failure modes in applied 
 The most common flaw in published ML-finance backtests is feature engineering performed on the full sample before the walk-forward split, silently leaking future information. Here, `DataEngine.engineer_features()` accepts an explicit `cutoff_date` and is re-called inside every rebalance iteration, ensuring that momentum, volatility, and technical features are computed only from data available at decision time. `[WF-1]`
 
 **2. Retraining bias in stacked ensembles.**
-A stacked meta-learner trained on the same data as its base models learns to correct in-sample base-model residuals, not genuine out-of-sample errors. The fix is a two-stage protocol: the meta-learner is first fitted on out-of-fold (OOF) base predictions (yielding unbiased IC/R² estimates), then both base models and the meta-learner are refitted on the full training window before deployment. `[ML-1]`
+A stacked meta-learner trained on the same data as its base models learns to correct in-sample base-model residuals, not genuine out-of-sample errors. The protocol has two stages: the meta-learner is evaluated walk-forward on out-of-fold (OOF) base predictions, so the reported IC comes from rows neither the base models nor the meta-learner were fit on, then both are refitted on the full training window before deployment. `[ML-1]`
 
 **3. Mis-scaled Black-Litterman prior uncertainty.**
 The standard practitioner implementation sets `τ = 1/n_assets` - a heuristic with no statistical justification. The theoretically correct choice (Idzorek 2005, He & Litterman 1999) is `τ = 1/T`, where `T` is the number of observations. For a 504-day training window and 15 assets, this correction shifts `τ` by a factor of ~34×, producing a substantially less dogmatic posterior and materially different allocations. `[BL-1]`
@@ -66,7 +66,7 @@ Market Data (15 ETFs, 2020-2024)
 | Component | Choice | Why not the alternative |
 |---|---|---|
 | Feature cutoff | `cutoff_date` per rebalance | Full-sample features leak future vol/momentum |
-| ML stacking | OOF meta-learner then full refit | In-sample stacking inflates IC (magnitude not measured here) |
+| ML stacking | Cross-fitted meta-learner then full refit | Scoring the meta-learner on the rows it was fit on gave mean IC 0.125 on pure noise (12 of 12 runs positive); see tests |
 | Covariance | Ledoit-Wolf shrinkage | Sample covariance is rank-deficient at T=504, N=15 |
 | τ scaling | `1/T`, not `1/N` | `1/N` overstates prior certainty by a factor of T/N ≈ 34 |
 | Vol model | GJR-GARCH (not GARCH) | Captures leverage effect; standard GARCH underestimates equity downside vol |
@@ -79,7 +79,7 @@ Market Data (15 ETFs, 2020-2024)
 | Class | Tickers | Role in portfolio |
 |---|---|---|
 | Broad equities | SPY, QQQ, IWM, EFA, EEM | Core equity beta; cross-sectional momentum signal |
-| Sector ETFs | XLF, XLE, XLK, XLV, XLI | Sector rotation; highest ML IC historically |
+| Sector ETFs | XLF, XLE, XLK, XLV, XLI | Sector rotation |
 | Fixed income | TLT, IEF, LQD | Duration and credit risk-off allocation |
 | Commodities | GLD, USO | Inflation hedge; low equity correlation in crisis |
 
@@ -89,7 +89,7 @@ Market Data (15 ETFs, 2020-2024)
 
 ### Black-Litterman posterior
 
-The BL model treats return estimation as a Bayesian inference problem. The prior is the CAPM equilibrium implied by market-cap weights; the likelihood is formed from ML views. The posterior is the minimum-variance blend:
+The BL model treats return estimation as a Bayesian inference problem. The prior is the CAPM equilibrium implied by market-cap weights; the likelihood is formed from ML views. In practice Yahoo Finance publishes no market cap or share count for ETFs, so `fetch_market_caps` falls back to equal weights for every ticker in the default universe and the prior is the equal-weight equilibrium. The results below use that prior (see `data/snapshot/market_caps.csv`). The posterior is the minimum-variance blend:
 
 $$\mu_{BL} = \bigl[(\tau\Sigma)^{-1} + P^\top\Omega^{-1}P\bigr]^{-1} \bigl[(\tau\Sigma)^{-1}\Pi + P^\top\Omega^{-1}Q\bigr]$$
 
@@ -140,33 +140,43 @@ where $\hat{E}[\max SR]$ is the expected maximum Sharpe across $N$ trials (appro
 
 ## Results
 
-Backtested **2020-01-01 - 2024-12-31** across the COVID crash (-34% SPY drawdown), 2022 rate shock (-18% SPY), and 2023-24 recovery - a stress-test that covers three distinct macro regimes.
+Backtested 2020-01-01 to 2024-12-31 across the COVID crash, the 2022 rate shock and the 2023-24 recovery. The first rebalance is at the end of 2021, after the 504-day training window fills; before it the portfolio holds equal weights. Prices and the market-cap prior are frozen in `data/snapshot/` so the run is repeatable. `make reproduce` reruns everything (about 25 minutes on 2 cores) and rewrites the block below; CI checks that the README matches `results/metrics.json`.
 
-| Metric | ML + BL Strategy | BL-only (ablation) | SPY (benchmark) |
+<!-- results:start (generated by scripts/render_readme.py, do not edit by hand) -->
+Sample: 2020-01-03 to 2024-12-30 (1256 trading days), monthly rebalance, 504-day training window, 21-day forecast horizon.
+
+| Metric | ML + BL Strategy | BL-only (ablation) | SPY |
 |---|---|---|---|
-| Ann. Return | **10.70%** | 8.79% | 15.64% |
-| Ann. Volatility | **14.57%** | 14.53% | 19.52% |
-| Sharpe Ratio | **0.460** | 0.329 | 0.597 |
-| Sortino Ratio | **0.537** | 0.386 | 0.803 |
-| Max Drawdown | **-28.89%** | -28.89% | -33.93% |
-| Beta | 0.576 | 0.599 | 1.000 |
-| Alpha (ann.) | **+1.69%** | -0.59% | - |
+| Ann. Return | 8.89% | 9.85% | 15.65% |
+| Ann. Volatility | 15.36% | 15.43% | 21.00% |
+| Sharpe Ratio | 0.318 | 0.379 | 0.555 |
+| Sortino Ratio | 0.382 | 0.455 | 0.680 |
+| Max Drawdown | -28.90% | -28.90% | -33.72% |
+| Beta | 0.639 | 0.653 | 1.000 |
+| Alpha (ann.) | -1.12% | -0.37% | n/a |
 
-> Results from `06_alpha_engine.ipynb` run on real market data (yfinance, adjusted close). Ann. Return is arithmetic (μ × 252) consistent across all columns. SPY statistics are computed from the same benchmark return series used to derive Beta and Alpha. The ablation column removes ML views while keeping BL + GARCH + CVaR identical, isolating the ML contribution.
+- Effect of the ML views (ML + BL minus BL-only): Sharpe -0.061, annual return -0.96%.
+- Block-bootstrap Sharpe test: SR 0.318, p = 0.277.
+- Deflated Sharpe Ratio: 0.397 against a threshold of 0.803 (n_trials = 15).
+- Cross-fitted out-of-fold IC over 540 asset-rebalance pairs: mean -0.023, median -0.030, positive in 45%. Only assets with positive IC at a rebalance send a view to Black-Litterman. Per-asset values are in results/ic_summary.csv.
+<!-- results:end -->
 
-> **Status of these numbers.** The table above was produced before the cross-validation purge fix (see Corrections below) and has not been regenerated, so treat it as a historical run, not a verified result. Re-run `notebooks/alpha_engine.ipynb` or `06_alpha_engine.ipynb` with live data to refresh it.
+How to read this:
 
-Reading the table as it stands: the strategy has lower volatility and drawdown than SPY, but a lower Sharpe ratio (0.460 vs 0.597) and lower return over this bull-market sample. The ML views added about 0.13 Sharpe over the BL-only ablation in this one run, with no significance test that survives the issues below.
-
-**Statistical validation: not currently valid.**
-- Block-bootstrap Sharpe test: reported p = 0.000 for SR = 0.460. Not regenerated since the fix.
-- Deflated Sharpe Ratio: reported DSR = 0.368 against a threshold of 1.251, which fails with n_trials = 15. This figure also predates a variance-inflation correction. The conclusion is that the Sharpe is not distinguishable from a multiple-testing null.
-- Information coefficient: the earlier report of a mean IC of 0.44 with p = 0.000 is withdrawn. An IC that high for monthly ETF returns is implausible (honest values are typically 0.02 to 0.05), and the test was invalid for three reasons: (1) the 21-day forward-return labels overlap and the CV had no purge gap, so training labels leaked into test folds; (2) each IC is a pooled time-series Spearman over about four years, dominated by a few regimes, not a cross-sectional IC; (3) the t-test across the 15 per-asset ICs treats highly correlated assets as independent.
-- The per-asset IC table has been removed for the same reasons.
+- The out-of-fold IC of the stacked ensemble is centred near zero and below zero for most assets, so the ML forecasts have no detectable skill on 21-day ETF returns in this sample. Adding the ML views to Black-Litterman does not improve on the BL-only ablation.
+- The Sharpe ratio is not significant under the block bootstrap and fails the deflated Sharpe test, so the strategy is not distinguishable from zero skill. It runs with lower volatility, drawdown and beta than SPY because of the position cap and the bond, gold and sector holdings, not because of the forecasts.
+- The ablation is narrower than it looks: both arms optimise only over the assets whose IC passed the gate at that rebalance, so the BL-only column still uses the ML model to choose the asset set and isolates only the effect of the view returns.
 
 ## Corrections
 
-- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test. Results need a re-run to see the post-fix IC.
+Earlier versions of this README reported a Sharpe of 0.460 for ML + BL against 0.329 for BL-only, a bootstrap p-value of 0.000 and a mean IC of 0.44. Those came from the bugs below. The CV gap, the meta-learner scoring, the bootstrap and the feasibility rule have regression tests.
+
+- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold.
+- In-sample meta-learner: the stacking Ridge was fit on the out-of-fold base predictions and then scored on the same rows, so it could flip the sign of any base model after seeing outcomes. The reported IC was positive even when all four base models had negative out-of-fold IC, and the pipeline gate (views only for assets with IC above zero) let all 15 assets through at all 36 rebalances in the pre-fix run. The meta-learner is now evaluated walk-forward (`_cross_fit_meta`). On pure-noise targets the old code gave mean IC 0.125 with 12 of 12 runs positive; the fixed code gives 0.003 with 6 of 12.
+- Deployed meta-learner: it was fit on in-sample base predictions, which rewards the base model that overfits most. It is now fit on the out-of-fold base predictions, as in scikit-learn StackingRegressor.
+- Block bootstrap: each resample was demeaned by its own mean, which made every null Sharpe exactly zero and returned p = 0 for any positive Sharpe. The series is now centred once before resampling.
+- Infeasible optimisation: with exactly 3 assets passing the gate and a 30% cap, a fully invested portfolio is impossible, so the solver failed and the fallback held 33% in each asset. The pipeline now requires ceil(1 / max_weight) assets and otherwise holds the equal-weight universe.
+- Selection bias in the printed IC test: the significance report tested only the assets that had passed the IC gate. It now uses every trained asset.
 
 ---
 
@@ -214,13 +224,17 @@ Alpha-Engine/
 │   ├── backtest.py          # PortfolioBacktester · StatisticalTests
 │   ├── visualization.py     # 4-panel performance + risk decomposition
 │   └── pipeline.py          # run_walk_forward orchestration
+├── scripts/
+│   ├── reproduce.py         # full backtest, writes results/
+│   └── render_readme.py     # renders the Results block, checked in CI
+├── results/                 # metrics.json, ic_summary.csv, daily_returns.csv
 ├── notebooks/
 │   └── alpha_engine.ipynb   # Narrative walkthrough (imports from src/)
 ├── tests/
-│   ├── test_data.py         # 17 tests: extraction, features, look-ahead
-│   ├── test_ml_alpha.py     # 13 tests: IC, train, predict, reproducibility
-│   ├── test_optimizer.py    # 14 tests: equilibrium identity, bounds, ERC
-│   └── test_backtest.py     # 16 tests: cost model, metrics, bootstrap, DSR
+│   ├── test_data.py         # 11 tests: extraction, features, look-ahead
+│   ├── test_ml_alpha.py     # 15 tests: IC, cross-fitted meta, train, predict
+│   ├── test_optimizer.py    # 16 tests: equilibrium identity, bounds, ERC
+│   └── test_backtest.py     # 22 tests: cost model, metrics, bootstrap, DSR
 ├── docs/
 │   └── methodology.md       # Full technical methodology (research note style)
 ├── data/                    # Local cache (gitignored)
@@ -266,7 +280,7 @@ jupyter notebook notebooks/alpha_engine.ipynb
 
 | Category | Library | Used for |
 |---|---|---|
-| Data | `yfinance` | Adjusted close + market cap retrieval |
+| Data | `yfinance` | Adjusted close (market cap retrieval returns nothing for ETFs) |
 | ML | `scikit-learn` | RF, GBM, SVR, Ridge; StandardScaler; LedoitWolf |
 | Volatility | `arch` | GJR-GARCH(1,1,1) with skewed-t distribution |
 | Optimisation | `cvxpy` | MV QP and Min-CVaR LP (CLARABEL/OSQP/ECOS cascade) |
@@ -283,7 +297,7 @@ jupyter notebook notebooks/alpha_engine.ipynb
 All inputs come from free, public sources. No paid data or API keys are required unless noted.
 
 - Yahoo Finance via the yfinance package (free, no key)
-- Files shipped in the `data/` folder of this repository
+- `data/snapshot/prices.csv` and `data/snapshot/market_caps.csv`: the exact inputs behind the Results table, downloaded on 2026-11-10
 
 ### Computational requirements
 
@@ -298,7 +312,15 @@ uv run pytest -q   # runs the test suite
 
 ### Runtime
 
-The test suite (61 tests) finishes in about 31 seconds on the machine above, including any data downloads it triggers.
+The test suite (64 tests) finishes in about 14 seconds on the machine above. `make reproduce`, the full walk-forward backtest from the frozen snapshot, takes about 23 minutes.
+
+```bash
+make reproduce   # rerun the backtest, write results/, refresh the README Results block
+make check       # confirm README numbers match results/metrics.json (also run in CI)
+uv run python scripts/reproduce.py --refresh   # download fresh prices into data/snapshot/ first
+```
+
+`06_alpha_engine.ipynb` in the repository root is an older standalone version with its own inline copies of the classes and saved outputs from before the fixes listed under Corrections. It is kept for reference only; `notebooks/alpha_engine.ipynb` imports the corrected code from `src/`.
 
 ### Citation
 

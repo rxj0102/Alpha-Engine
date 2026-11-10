@@ -155,6 +155,23 @@ class MLAlphaEngine:
             ("ridge", Ridge(alpha=cfg.ridge_alpha)),
         ]
 
+    def _cross_fit_meta(self, meta_X: np.ndarray, meta_y: np.ndarray):
+        """Walk-forward predictions of the meta Ridge on rows it was not fit on.
+
+        Returns (predictions, matching actuals). Uses the same purge gap as the
+        base-model CV because 21-day labels overlap across adjacent rows.
+        """
+        n_splits = max(2, self.cfg.n_cv_splits - 2)
+        cv = TimeSeriesSplit(n_splits=n_splits, gap=self.cfg.horizon)
+        preds, acts = [], []
+        for tr, te in cv.split(meta_X):
+            sc = StandardScaler()
+            m = Ridge(alpha=self.cfg.meta_ridge_alpha)
+            m.fit(sc.fit_transform(meta_X[tr]), meta_y[tr])
+            preds.append(m.predict(sc.transform(meta_X[te])))
+            acts.append(meta_y[te])
+        return np.concatenate(preds), np.concatenate(acts)
+
     # ── Training ───────────────────────────────────────────────────────────
 
     def train(self, X: pd.DataFrame, y: pd.Series, ticker: str) -> Dict:
@@ -201,28 +218,33 @@ class MLAlphaEngine:
         meta_X_oof = np.column_stack([oof[name][valid] for name, _ in base_models])
         meta_y_oof = actuals[valid]
 
-        meta_scaler_oof = StandardScaler()
-        meta_oof = Ridge(alpha=self.cfg.meta_ridge_alpha)
-        meta_oof.fit(meta_scaler_oof.fit_transform(meta_X_oof), meta_y_oof)
-        oof_preds = meta_oof.predict(meta_scaler_oof.transform(meta_X_oof))
+        # Cross-fitted meta-learner: the stacking Ridge is itself evaluated
+        # walk-forward on the OOF rows. Fitting and scoring it on the same rows
+        # lets it flip the sign of base predictions after seeing the outcomes,
+        # which made the reported IC positive even when every base model had
+        # negative out-of-fold IC.
+        oof_preds, meta_y_eval = self._cross_fit_meta(meta_X_oof, meta_y_oof)
 
-        oof_ic = self._ic(meta_y_oof, oof_preds)
-        oof_r2 = r2_score(meta_y_oof, oof_preds)
+        oof_ic = self._ic(meta_y_eval, oof_preds)
+        oof_r2 = r2_score(meta_y_eval, oof_preds) if len(oof_preds) > 1 else np.nan
         try:
-            cal_slope = float(np.polyfit(meta_y_oof, oof_preds, 1)[0])
+            cal_slope = float(np.polyfit(meta_y_eval, oof_preds, 1)[0])
         except (np.linalg.LinAlgError, ValueError):
             cal_slope = np.nan
 
-        # Stage 2: Full refit — base models and meta-learner on same data [ML-1]
+        # Stage 2: refit base models on all data; meta-learner on OOF predictions [ML-1]
         final_scaler = StandardScaler()
         Xall_s = final_scaler.fit_transform(X)
         for name, m in base_models:
             m.fit(Xall_s, y)
 
-        full_base = np.column_stack([m.predict(Xall_s) for _, m in base_models])
+        # The deployed meta-learner is fit on out-of-fold base predictions, as
+        # in sklearn's StackingRegressor. Fitting it on in-sample base
+        # predictions would reward the base model that overfits most (the
+        # random forest), which is not how the models behave at inference.
         meta_scaler_final = StandardScaler()
         meta_final = Ridge(alpha=self.cfg.meta_ridge_alpha)
-        meta_final.fit(meta_scaler_final.fit_transform(full_base), y.values)
+        meta_final.fit(meta_scaler_final.fit_transform(meta_X_oof), meta_y_oof)
 
         self.models[ticker] = {name: m for name, m in base_models}
         self.models[ticker].update({"meta": meta_final, "meta_scaler": meta_scaler_final})

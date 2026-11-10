@@ -320,7 +320,7 @@ make check       # confirm README numbers match results/metrics.json (also run i
 uv run python scripts/reproduce.py --refresh   # download fresh prices into data/snapshot/ first
 ```
 
-`06_alpha_engine.ipynb` in the repository root is an older standalone version with its own inline copies of the classes and saved outputs from before the fixes listed under Corrections. It is kept for reference only; `notebooks/alpha_engine.ipynb` imports the corrected code from `src/`.
+`notebooks/alpha_engine.ipynb` is the narrative walkthrough and imports the corrected code from `src/`. An older standalone notebook with pre-fix outputs was removed; it remains in git history.
 
 ### Citation
 

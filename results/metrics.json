@@ -1,0 +1,54 @@
+{
+  "config": {
+    "start": "2020-01-01",
+    "end": "2024-12-31",
+    "train_window": 504,
+    "horizon": 21,
+    "rebalance": "ME",
+    "risk_free": 0.04
+  },
+  "sample": {
+    "first_day": "2020-01-03",
+    "last_day": "2024-12-30",
+    "n_days": 1256
+  },
+  "strategy": {
+    "Ann. Return": 0.0889,
+    "Ann. Volatility": 0.1536,
+    "Sharpe Ratio": 0.318,
+    "Sortino Ratio": 0.382,
+    "Max Drawdown": -0.289,
+    "Beta": 0.639,
+    "Alpha (ann.)": -0.0112
+  },
+  "ablation_bl_only": {
+    "Ann. Return": 0.0985,
+    "Ann. Volatility": 0.1543,
+    "Sharpe Ratio": 0.379,
+    "Sortino Ratio": 0.455,
+    "Max Drawdown": -0.289,
+    "Beta": 0.653,
+    "Alpha (ann.)": -0.0037
+  },
+  "spy": {
+    "Ann. Return": 0.15649251,
+    "Ann. Volatility": 0.21004793,
+    "Sharpe Ratio": 0.55459964,
+    "Sortino Ratio": 0.68026614,
+    "Max Drawdown": -0.33717269,
+    "Beta": 1.0
+  },
+  "tests": {
+    "bootstrap_sharpe": 0.31829997,
+    "bootstrap_p": 0.2766,
+    "dsr": 0.39660261,
+    "dsr_threshold": 0.80256649,
+    "dsr_n_trials": 15
+  },
+  "ic": {
+    "n_asset_rebalances": 540,
+    "mean": -0.022921337,
+    "median": -0.030335203,
+    "share_positive": 0.45
+  }
+}

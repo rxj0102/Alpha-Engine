@@ -135,6 +135,20 @@ class TestBlockBootstrapSharpe:
         result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=500)
         assert result["p_value"] > 0.01  # not aggressively rejecting H₀
 
+    def test_modest_sr_not_significant(self):
+        """Sharpe about 0.4 over five years has a standard error near 0.45.
+
+        Regression: demeaning each bootstrap sample made every null Sharpe zero,
+        so any positive Sharpe got p = 0.
+        """
+        rng = np.random.default_rng(3)
+        r = rng.normal(0.0, 0.01, 1260)
+        ex = r - r.mean() + 0.4 * 0.01 / np.sqrt(252)   # excess SR exactly 0.4
+        ret = pd.Series(ex + 0.04 / 252)
+        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=1000)
+        assert abs(result["observed_sr"] - 0.4) < 0.02
+        assert 0.1 < result["p_value"] < 0.5
+
     def test_returns_observed_sr(self):
         ret = pd.Series(np.random.normal(0.0004, 0.01, 300))
         result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=100)
@@ -187,3 +201,14 @@ class TestICSig:
         result = StatisticalTests.ic_significance(ic)
         expected_icir = ic.mean() / ic.std()
         assert abs(result["ICIR"] - expected_icir) < 1e-10
+
+
+class TestMinAssets:
+    """Fully invested long-only weights capped at w need ceil(1 / w) assets."""
+
+    def test_thirty_percent_cap_needs_four(self):
+        from src.pipeline import min_assets
+        assert min_assets(0.30) == 4
+        assert min_assets(0.25) == 4
+        assert min_assets(0.20) == 5
+        assert min_assets(0.50) == 3

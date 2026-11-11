@@ -187,3 +187,39 @@ class TestICSig:
         result = StatisticalTests.ic_significance(ic)
         expected_icir = ic.mean() / ic.std()
         assert abs(result["ICIR"] - expected_icir) < 1e-10
+
+
+# ── Tests: like-for-like comparison window ────────────────────────────────────
+
+from src.backtest import comparison_table, summarize_returns
+
+
+class TestComparison:
+    def test_metrics_window_excludes_warmup(self, backtester, prices, equal_weights):
+        backtester.run(prices, equal_weights)
+        start = prices.index[100]
+        full = backtester.metrics()
+        windowed = backtester.metrics(start=start)
+        assert full != windowed
+
+    def test_comparison_starts_after_eval_start(self, prices):
+        ret = prices.pct_change()
+        start, end = prices.index[60], prices.index[-1]
+        tbl = comparison_table({"A": ret["SPY"], "B": ret["TLT"]}, 0.04, ret["SPY"], start, end)
+        assert set(tbl.window) == {"full", "first_half", "second_half"}
+        full = tbl[(tbl.strategy == "A") & (tbl.window == "full")].iloc[0]
+        assert pd.Timestamp(full.window_start) > start
+        assert full.n_days == int((ret.index > start).sum())
+
+    def test_benchmark_against_itself_has_unit_beta(self, prices):
+        r = prices["SPY"].pct_change()
+        out = summarize_returns(r, 0.04, r)
+        assert abs(out["beta"] - 1.0) < 1e-9
+        assert abs(out["alpha_ann"]) < 1e-9
+
+    def test_halves_partition_the_window(self, prices):
+        r = prices["GLD"].pct_change()
+        start, end = prices.index[10], prices.index[-1]
+        tbl = comparison_table({"G": r}, 0.0, None, start, end)
+        n = tbl.set_index("window").n_days
+        assert n["first_half"] + n["second_half"] == n["full"]

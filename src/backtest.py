@@ -139,7 +139,12 @@ class PortfolioBacktester:
 
     # ── Performance metrics ────────────────────────────────────────────────
 
-    def metrics(self, benchmark: Optional[pd.Series] = None) -> Dict:
+    def metrics(
+        self,
+        benchmark: Optional[pd.Series] = None,
+        start: Optional[pd.Timestamp] = None,
+        end: Optional[pd.Timestamp] = None,
+    ) -> Dict:
         """
         Compute standard risk-adjusted performance statistics.
 
@@ -151,6 +156,10 @@ class PortfolioBacktester:
         """
         ph = self.portfolio_history
         ret = ph["portfolio_value"].pct_change().dropna()
+        if start is not None:
+            ret = ret[ret.index > pd.Timestamp(start)]
+        if end is not None:
+            ret = ret[ret.index <= pd.Timestamp(end)]
         excess = ret - self.rf_daily
         ann_ret = float(ret.mean() * 252)
         ann_vol = float(ret.std() * np.sqrt(252))
@@ -182,6 +191,66 @@ class PortfolioBacktester:
             result.update({"Beta": f"{beta:.3f}", "Alpha (ann.)": f"{alpha:.2%}"})
 
         return result
+
+
+def summarize_returns(
+    ret: pd.Series, rf: float, benchmark: Optional[pd.Series] = None
+) -> Dict[str, float]:
+    """Numeric performance summary of a daily return series.
+
+    Same definitions as PortfolioBacktester.metrics (arithmetic annual
+    return, Sharpe and Sortino on excess over ``rf``), returned as floats
+    so several strategies can be tabulated side by side.
+    """
+    ret = ret.dropna()
+    rf_d = rf / 252
+    ex = ret - rf_d
+    cum = (1 + ret).cumprod()
+    down = ex[ex < 0]
+    out = {
+        "ann_return": float(ret.mean() * 252),
+        "ann_vol": float(ret.std() * np.sqrt(252)),
+        "sharpe": float(ex.mean() / ex.std() * np.sqrt(252)) if ex.std() > 0 else np.nan,
+        "sortino": float(ex.mean() * 252 / (down.std() * np.sqrt(252))) if len(down) > 1 else np.nan,
+        "max_drawdown": float((cum / cum.cummax() - 1).min()),
+        "n_days": int(len(ret)),
+    }
+    if benchmark is not None:
+        b = benchmark.reindex(ret.index).dropna()
+        r = ret.reindex(b.index)
+        if len(b) > 2 and b.var() > 0:
+            beta = float(np.cov(r.values, b.values)[0, 1] / b.var())
+            out["beta"] = beta
+            out["alpha_ann"] = float(r.mean() * 252 - beta * b.mean() * 252)
+    return out
+
+
+def comparison_table(
+    returns_by_name: Dict[str, pd.Series],
+    rf: float,
+    benchmark: Optional[pd.Series],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> pd.DataFrame:
+    """Side-by-side metrics on the full window and on each half of it.
+
+    Only returns strictly after ``start`` (the first rebalance date) are
+    used, so no strategy is credited with a warm-up period in which its
+    weights were not yet set by its own model.
+    """
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+    mid = start + (end - start) / 2
+    windows = {"full": (start, end), "first_half": (start, mid), "second_half": (mid, end)}
+    rows = []
+    for name, ret in returns_by_name.items():
+        for wname, (a, b) in windows.items():
+            r = ret[(ret.index > a) & (ret.index <= b)]
+            row = {"strategy": name, "window": wname,
+                   "window_start": str(r.index.min().date()) if len(r) else "",
+                   "window_end": str(r.index.max().date()) if len(r) else ""}
+            row.update(summarize_returns(r, rf, benchmark))
+            rows.append(row)
+    return pd.DataFrame(rows)
 
 
 # ── Statistical validation ─────────────────────────────────────────────────────

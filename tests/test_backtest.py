@@ -244,3 +244,16 @@ class TestBootstrapNull:
         out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=1000, rf=0.04)
         assert out["p_value"] < 0.01
 
+
+class TestICSignificanceHAC:
+    def test_hac_is_more_conservative_for_persistent_ics(self):
+        rng = np.random.default_rng(0)
+        # Highly persistent IC series, as from overlapping training windows
+        e = rng.normal(0, 0.05, 60)
+        ic = np.zeros(60)
+        for i in range(1, 60):
+            ic[i] = 0.9 * ic[i - 1] + e[i]
+        s = pd.Series(ic + 0.02)
+        plain = StatisticalTests.ic_significance(s)
+        hac = StatisticalTests.ic_significance(s, hac_lags=23)
+        assert abs(hac["t_stat"]) < abs(plain["t_stat"])

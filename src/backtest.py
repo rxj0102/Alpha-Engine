@@ -386,9 +386,14 @@ class StatisticalTests:
         return {"DSR": dsr, "sr_threshold_ann": thr_ann, "passes_dsr": dsr > 1.0}
 
     @staticmethod
-    def ic_significance(ic_series: pd.Series) -> Dict:
+    def ic_significance(ic_series: pd.Series, hac_lags: int = 0) -> Dict:
         """
-        One-sample t-test on the IC time series (H₀: mean IC = 0).
+        Test H₀: mean IC = 0 on the IC time series.
+
+        With ``hac_lags > 0`` the t-statistic uses a Newey-West standard error.
+        Use it when consecutive ICs come from overlapping training windows
+        (a 504-day window refitted monthly overlaps the next ~23 fits), which
+        makes a plain one-sample t-test treat ~23 near-copies as independent.
 
         ICIR = mean IC / std(IC) — the information ratio of the alpha signal.
         A rule of thumb: ICIR > 0.5 is considered a strong alpha signal.
@@ -401,7 +406,14 @@ class StatisticalTests:
         ic = ic_series.dropna()
         if len(ic) < 5:
             return {"error": "Insufficient observations (need ≥ 5)"}
-        t, p = stats.ttest_1samp(ic, popmean=0.0)
+        if hac_lags > 0:
+            import statsmodels.api as sm
+            fit = sm.OLS(ic.values, np.ones(len(ic))).fit(
+                cov_type="HAC", cov_kwds={"maxlags": min(hac_lags, len(ic) - 1)}
+            )
+            t, p = float(fit.tvalues[0]), float(fit.pvalues[0])
+        else:
+            t, p = stats.ttest_1samp(ic, popmean=0.0)
         icir = float(ic.mean() / ic.std()) if ic.std() > 0 else np.nan
         return {
             "mean_IC": float(ic.mean()),

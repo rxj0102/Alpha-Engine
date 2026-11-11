@@ -258,7 +258,10 @@ def run_walk_forward(cfg: Config = None) -> Dict:
     print("\n  Per-asset IC significance:")
     for t, ics in ic_history.items():
         if len(ics) >= 5:
-            r = StatisticalTests.ic_significance(pd.Series(ics))
+            # Consecutive fits share all but one month of the training window.
+            r = StatisticalTests.ic_significance(
+                pd.Series(ics), hac_lags=bc.train_window // 21
+            )
             if "error" not in r:
                 sig = "✓" if r["significant_5pct"] else "✗"
                 print(

@@ -172,3 +172,22 @@ def test_cv_purges_horizon_rows_between_train_and_test(monkeypatch):
     y = pd.Series(rng.normal(size=400))
     MLAlphaEngine(cfg).train(X, y, "TEST")
     assert seen.get("gap") == cfg.horizon
+
+
+def test_ic_is_near_zero_on_pure_noise():
+    """With features unrelated to the target, the reported OOF IC must not be
+    systematically positive (the in-sample meta fit made it so)."""
+    from src.config import MLConfig
+    from src.ml_alpha import MLAlphaEngine
+    ics = []
+    for seed in range(12):
+        rng = np.random.default_rng(seed)
+        n = 500
+        idx = pd.bdate_range("2020-01-01", periods=n)
+        X = pd.DataFrame(rng.normal(size=(n, 6)), index=idx, columns=[f"f{i}" for i in range(6)])
+        y = pd.Series(rng.normal(0, 0.03, n), index=idx)
+        eng = MLAlphaEngine(cfg=MLConfig(rf_n_estimators=30, gbr_n_estimators=30))
+        ics.append(eng.train(X, y, f"T{seed}")["IC"])
+    # Each IC uses non-overlapping rows only (~5 to 20 points), so single
+    # values are noisy; the mean over 12 noise draws must still centre on 0.
+    assert abs(np.mean(ics)) < 0.15

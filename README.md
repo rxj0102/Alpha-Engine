@@ -140,33 +140,42 @@ where $\hat{E}[\max SR]$ is the expected maximum Sharpe across $N$ trials (appro
 
 ## Results
 
-Backtested **2020-01-01 - 2024-12-31** across the COVID crash (-34% SPY drawdown), 2022 rate shock (-18% SPY), and 2023-24 recovery - a stress-test that covers three distinct macro regimes.
+Produced by `python -m src.pipeline` on 2026-11-11 (yfinance adjusted closes, 15 ETFs, monthly rebalance, same cost model for every column). Source files: `outputs/comparison.csv`, `outputs/run_summary.json`.
 
-| Metric | ML + BL Strategy | BL-only (ablation) | SPY (benchmark) |
-|---|---|---|---|
-| Ann. Return | **10.70%** | 8.79% | 15.64% |
-| Ann. Volatility | **14.57%** | 14.53% | 19.52% |
-| Sharpe Ratio | **0.460** | 0.329 | 0.597 |
-| Sortino Ratio | **0.537** | 0.386 | 0.803 |
-| Max Drawdown | **-28.89%** | -28.89% | -33.93% |
-| Beta | 0.576 | 0.599 | 1.000 |
-| Alpha (ann.) | **+1.69%** | -0.59% | - |
+**Evaluation window: 2021-12-31 to 2024-12-30.** The walk-forward needs 504 days of training data, so the first rebalance is 2021-12-31. Before that the weights were a 1/N placeholder, and earlier versions of this table counted that placeholder (including the 2020 COVID crash) as strategy performance. Every column below starts after the first rebalance.
 
-> Results from `06_alpha_engine.ipynb` run on real market data (yfinance, adjusted close). Ann. Return is arithmetic (μ × 252) consistent across all columns. SPY statistics are computed from the same benchmark return series used to derive Beta and Alpha. The ablation column removes ML views while keeping BL + GARCH + CVaR identical, isolating the ML contribution.
+| Metric | ML + BL | BL only | 1/N equal weight | SPY |
+|---|---|---|---|---|
+| Ann. return | 4.95% | 5.51% | 6.05% | 10.17% |
+| Ann. volatility | 11.60% | 12.62% | 12.64% | 17.51% |
+| Sharpe (excess of 4%) | 0.08 | 0.12 | 0.16 | 0.35 |
+| Sortino | 0.13 | 0.18 | 0.24 | 0.50 |
+| Max drawdown | -20.49% | -22.61% | -18.33% | -24.50% |
+| Beta to SPY | 0.50 | 0.57 | 0.66 | 1.00 |
+| Alpha (ann.) | -0.15% | -0.27% | -0.64% | 0.00% |
 
-> **Status of these numbers.** The table above was produced before the cross-validation purge fix (see Corrections below) and has not been regenerated, so treat it as a historical run, not a verified result. Re-run `notebooks/alpha_engine.ipynb` or `06_alpha_engine.ipynb` with live data to refresh it.
+**Sharpe by half of the window**
 
-Reading the table as it stands: the strategy has lower volatility and drawdown than SPY, but a lower Sharpe ratio (0.460 vs 0.597) and lower return over this bull-market sample. The ML views added about 0.13 Sharpe over the BL-only ablation in this one run, with no significance test that survives the issues below.
+| Window | ML + BL | BL only | 1/N equal weight | SPY |
+|---|---|---|---|---|
+| 2022-01-03 to 2023-06-30 | -0.47 | -0.45 | -0.28 | -0.22 |
+| 2023-07-03 to 2024-12-30 | 0.76 | 0.83 | 0.88 | 1.39 |
 
-**Statistical validation: not currently valid.**
-- Block-bootstrap Sharpe test: reported p = 0.000 for SR = 0.460. Not regenerated since the fix.
-- Deflated Sharpe Ratio: reported DSR = 0.368 against a threshold of 1.251, which fails with n_trials = 15. This figure also predates a variance-inflation correction. The conclusion is that the Sharpe is not distinguishable from a multiple-testing null.
-- Information coefficient: the earlier report of a mean IC of 0.44 with p = 0.000 is withdrawn. An IC that high for monthly ETF returns is implausible (honest values are typically 0.02 to 0.05), and the test was invalid for three reasons: (1) the 21-day forward-return labels overlap and the CV had no purge gap, so training labels leaked into test folds; (2) each IC is a pooled time-series Spearman over about four years, dominated by a few regimes, not a cross-sectional IC; (3) the t-test across the 15 per-asset ICs treats highly correlated assets as independent.
-- The per-asset IC table has been removed for the same reasons.
+**Reading this honestly.**
+- The ML views do not help. ML + BL has a lower Sharpe (0.08) than both the BL-only ablation (0.12) and the 1/N portfolio on the same universe (0.16), and all three trail SPY (0.35) over a sample in which US large caps led.
+- Significance: the block-bootstrap p-value for the ML + BL Sharpe is 0.45, and the Deflated Sharpe Ratio is 0.080 against a threshold of 1.025 with n_trials = 15. Neither supports an edge.
+- Signal quality: across the 36 monthly refits, the mean out-of-fold IC per asset ranges from -0.12 to 0.05. With Newey-West errors only XLE, TLT, GLD are significant at 5%, and all three have a negative mean IC. Forwarding views only when the latest IC is positive is close to a coin flip at this sample size: on random-walk prices the same pipeline produced ICs between -0.54 and 0.71 before the IC fixes below.
+- The BL prior uses each ETF's total assets from Yahoo as its size. These are current values, so a 2022 prior uses 2026 fund sizes; historical AUM is not freely available.
 
 ## Corrections
 
-- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test. Results need a re-run to see the post-fix IC.
+- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test.
+- Warm-up counted as performance: metrics ran from the start of the price data, so roughly two years of 1/N placeholder weights were reported as strategy returns. All metrics and the significance report now start at the first rebalance.
+- 1/N baseline added: same universe, rebalance schedule and cost model as the strategy.
+- Bootstrap Sharpe test: each bootstrap sample was centred on its own mean, so every null Sharpe was zero and p was 0 for any positive Sharpe. The observed series is now demeaned once and then resampled.
+- IC inflation, three causes: the meta-learner was scored on the rows it was fitted on (now walk-forward); the Spearman IC used overlapping 21-day forward returns (now non-overlapping rows only); and the IC summary averaged only assets whose IC was positive and t-tested correlated assets as independent (now all assets, descriptive, with per-asset Newey-West tests).
+- BL prior: Yahoo reports no market cap for ETFs, so every run used equal caps (a 1/N prior). The code now falls back to fund total assets and logs a warning if both are missing.
+- Results above regenerated on 2026-11-11 after all of these changes.
 
 ---
 

@@ -187,3 +187,73 @@ class TestICSig:
         result = StatisticalTests.ic_significance(ic)
         expected_icir = ic.mean() / ic.std()
         assert abs(result["ICIR"] - expected_icir) < 1e-10
+
+
+# ── Tests: like-for-like comparison window ────────────────────────────────────
+
+from src.backtest import comparison_table, summarize_returns
+
+
+class TestComparison:
+    def test_metrics_window_excludes_warmup(self, backtester, prices, equal_weights):
+        backtester.run(prices, equal_weights)
+        start = prices.index[100]
+        full = backtester.metrics()
+        windowed = backtester.metrics(start=start)
+        assert full != windowed
+
+    def test_comparison_starts_after_eval_start(self, prices):
+        ret = prices.pct_change()
+        start, end = prices.index[60], prices.index[-1]
+        tbl = comparison_table({"A": ret["SPY"], "B": ret["TLT"]}, 0.04, ret["SPY"], start, end)
+        assert set(tbl.window) == {"full", "first_half", "second_half"}
+        full = tbl[(tbl.strategy == "A") & (tbl.window == "full")].iloc[0]
+        assert pd.Timestamp(full.window_start) > start
+        assert full.n_days == int((ret.index > start).sum())
+
+    def test_benchmark_against_itself_has_unit_beta(self, prices):
+        r = prices["SPY"].pct_change()
+        out = summarize_returns(r, 0.04, r)
+        assert abs(out["beta"] - 1.0) < 1e-9
+        assert abs(out["alpha_ann"]) < 1e-9
+
+    def test_halves_partition_the_window(self, prices):
+        r = prices["GLD"].pct_change()
+        start, end = prices.index[10], prices.index[-1]
+        tbl = comparison_table({"G": r}, 0.0, None, start, end)
+        n = tbl.set_index("window").n_days
+        assert n["first_half"] + n["second_half"] == n["full"]
+
+
+class TestBootstrapNull:
+    def test_matches_analytic_pvalue_for_iid_returns(self):
+        """For iid returns the bootstrap p-value should be close to the
+        one-sided normal p-value 1 - Phi(SR * sqrt(years)). The old code gave
+        p = 0 for any positive Sharpe."""
+        from scipy.stats import norm
+        for seed in (3, 5, 8):
+            rng = np.random.default_rng(seed)
+            r = pd.Series(rng.normal(0.04 / 252 + 0.0001, 0.0065, 756))
+            out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=2000, rf=0.04)
+            analytic = 1 - norm.cdf(out["observed_sr"] * np.sqrt(756 / 252))
+            assert abs(out["p_value"] - analytic) < 0.06
+
+    def test_strong_signal_is_significant(self):
+        rng = np.random.default_rng(4)
+        r = pd.Series(rng.normal(0.04 / 252 + 0.002, 0.006, 1500))  # SR above 5
+        out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=1000, rf=0.04)
+        assert out["p_value"] < 0.01
+
+
+class TestICSignificanceHAC:
+    def test_hac_is_more_conservative_for_persistent_ics(self):
+        rng = np.random.default_rng(0)
+        # Highly persistent IC series, as from overlapping training windows
+        e = rng.normal(0, 0.05, 60)
+        ic = np.zeros(60)
+        for i in range(1, 60):
+            ic[i] = 0.9 * ic[i - 1] + e[i]
+        s = pd.Series(ic + 0.02)
+        plain = StatisticalTests.ic_significance(s)
+        hac = StatisticalTests.ic_significance(s, hac_lags=23)
+        assert abs(hac["t_stat"]) < abs(plain["t_stat"])

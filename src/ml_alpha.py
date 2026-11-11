@@ -188,7 +188,9 @@ class MLAlphaEngine:
         actuals = np.full(n, np.nan)
 
         # Stage 1: OOF walk-forward CV (per-fold scaling to prevent leakage)
+        folds = []
         for train_idx, test_idx in tscv.split(X):
+            folds.append(test_idx)
             scaler = StandardScaler()
             Xtr_s = scaler.fit_transform(X.iloc[train_idx])
             Xte_s = scaler.transform(X.iloc[test_idx])
@@ -197,16 +199,35 @@ class MLAlphaEngine:
                 oof[name][test_idx] = m.predict(Xte_s)
             actuals[test_idx] = y.iloc[test_idx].values
 
-        valid = ~np.isnan(actuals)
-        meta_X_oof = np.column_stack([oof[name][valid] for name, _ in base_models])
+        # Meta-learner evaluated walk-forward too: fold k is scored by a meta
+        # model fitted only on the OOF rows of folds before k (purged by the
+        # horizon). Fitting the meta model on all OOF rows and scoring the same
+        # rows makes the second stage in-sample and inflates the reported IC.
+        base_oof = np.column_stack([oof[name] for name, _ in base_models])
+        meta_pred = np.full(n, np.nan)
+        h = self.cfg.horizon
+        for k in range(1, len(folds)):
+            test_idx = folds[k]
+            hist = np.concatenate(folds[:k])
+            hist = hist[hist < test_idx[0] - h]
+            if len(hist) < 20:
+                continue
+            sc = StandardScaler()
+            mk = Ridge(alpha=self.cfg.meta_ridge_alpha)
+            mk.fit(sc.fit_transform(base_oof[hist]), actuals[hist])
+            meta_pred[test_idx] = mk.predict(sc.transform(base_oof[test_idx]))
+
+        valid = ~np.isnan(meta_pred)
         meta_y_oof = actuals[valid]
+        oof_preds = meta_pred[valid]
 
-        meta_scaler_oof = StandardScaler()
-        meta_oof = Ridge(alpha=self.cfg.meta_ridge_alpha)
-        meta_oof.fit(meta_scaler_oof.fit_transform(meta_X_oof), meta_y_oof)
-        oof_preds = meta_oof.predict(meta_scaler_oof.transform(meta_X_oof))
+        # IC on non-overlapping rows only. Consecutive h-day forward returns
+        # share h-1 days, so a Spearman over every row of two smooth series is
+        # badly inflated: on pure random walks it averaged |IC| = 0.28 here.
+        step = max(1, h)
+        ic_y, ic_p = meta_y_oof[::step], oof_preds[::step]
 
-        oof_ic = self._ic(meta_y_oof, oof_preds)
+        oof_ic = self._ic(ic_y, ic_p) if len(ic_y) >= 5 else np.nan
         oof_r2 = r2_score(meta_y_oof, oof_preds)
         try:
             cal_slope = float(np.polyfit(meta_y_oof, oof_preds, 1)[0])

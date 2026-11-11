@@ -139,7 +139,12 @@ class PortfolioBacktester:
 
     # ── Performance metrics ────────────────────────────────────────────────
 
-    def metrics(self, benchmark: Optional[pd.Series] = None) -> Dict:
+    def metrics(
+        self,
+        benchmark: Optional[pd.Series] = None,
+        start: Optional[pd.Timestamp] = None,
+        end: Optional[pd.Timestamp] = None,
+    ) -> Dict:
         """
         Compute standard risk-adjusted performance statistics.
 
@@ -151,6 +156,10 @@ class PortfolioBacktester:
         """
         ph = self.portfolio_history
         ret = ph["portfolio_value"].pct_change().dropna()
+        if start is not None:
+            ret = ret[ret.index > pd.Timestamp(start)]
+        if end is not None:
+            ret = ret[ret.index <= pd.Timestamp(end)]
         excess = ret - self.rf_daily
         ann_ret = float(ret.mean() * 252)
         ann_vol = float(ret.std() * np.sqrt(252))
@@ -182,6 +191,66 @@ class PortfolioBacktester:
             result.update({"Beta": f"{beta:.3f}", "Alpha (ann.)": f"{alpha:.2%}"})
 
         return result
+
+
+def summarize_returns(
+    ret: pd.Series, rf: float, benchmark: Optional[pd.Series] = None
+) -> Dict[str, float]:
+    """Numeric performance summary of a daily return series.
+
+    Same definitions as PortfolioBacktester.metrics (arithmetic annual
+    return, Sharpe and Sortino on excess over ``rf``), returned as floats
+    so several strategies can be tabulated side by side.
+    """
+    ret = ret.dropna()
+    rf_d = rf / 252
+    ex = ret - rf_d
+    cum = (1 + ret).cumprod()
+    down = ex[ex < 0]
+    out = {
+        "ann_return": float(ret.mean() * 252),
+        "ann_vol": float(ret.std() * np.sqrt(252)),
+        "sharpe": float(ex.mean() / ex.std() * np.sqrt(252)) if ex.std() > 0 else np.nan,
+        "sortino": float(ex.mean() * 252 / (down.std() * np.sqrt(252))) if len(down) > 1 else np.nan,
+        "max_drawdown": float((cum / cum.cummax() - 1).min()),
+        "n_days": int(len(ret)),
+    }
+    if benchmark is not None:
+        b = benchmark.reindex(ret.index).dropna()
+        r = ret.reindex(b.index)
+        if len(b) > 2 and b.var() > 0:
+            beta = float(np.cov(r.values, b.values)[0, 1] / b.var())
+            out["beta"] = beta
+            out["alpha_ann"] = float(r.mean() * 252 - beta * b.mean() * 252)
+    return out
+
+
+def comparison_table(
+    returns_by_name: Dict[str, pd.Series],
+    rf: float,
+    benchmark: Optional[pd.Series],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> pd.DataFrame:
+    """Side-by-side metrics on the full window and on each half of it.
+
+    Only returns strictly after ``start`` (the first rebalance date) are
+    used, so no strategy is credited with a warm-up period in which its
+    weights were not yet set by its own model.
+    """
+    start, end = pd.Timestamp(start), pd.Timestamp(end)
+    mid = start + (end - start) / 2
+    windows = {"full": (start, end), "first_half": (start, mid), "second_half": (mid, end)}
+    rows = []
+    for name, ret in returns_by_name.items():
+        for wname, (a, b) in windows.items():
+            r = ret[(ret.index > a) & (ret.index <= b)]
+            row = {"strategy": name, "window": wname,
+                   "window_start": str(r.index.min().date()) if len(r) else "",
+                   "window_end": str(r.index.max().date()) if len(r) else ""}
+            row.update(summarize_returns(r, rf, benchmark))
+            rows.append(row)
+    return pd.DataFrame(rows)
 
 
 # ── Statistical validation ─────────────────────────────────────────────────────
@@ -220,7 +289,7 @@ class StatisticalTests:
         Circular block bootstrap procedure:
         1. Treat the return series as circular (wrapping around at the end)
         2. Randomly sample starting indices, take blocks of length b = 21
-        3. Centre each bootstrap sample at zero (enforces H₀: SR = 0)
+        3. Demean the observed series once (enforces H₀: SR = 0), then resample it
         4. Compute bootstrap SR; repeat B = 5000 times
         5. p-value = fraction of bootstrap SRs ≥ observed SR
 
@@ -237,13 +306,16 @@ class StatisticalTests:
         n = len(ex)
         obs_sr = float(np.sqrt(252) * ex.mean() / ex.std())
 
+        # Impose H0 once by demeaning the observed series, then resample it.
+        # Centring each bootstrap sample at its own mean (the previous code)
+        # makes every null Sharpe exactly zero, so p was 0 for any positive SR.
+        ex0 = ex - ex.mean()
         rng = np.random.default_rng(SEED)
         null_srs = []
         for _ in range(n_bootstrap):
             starts = rng.integers(0, n, size=n // block_size + 1)
             idx = np.concatenate([np.arange(s, s + block_size) % n for s in starts])[:n]
-            boot = ex[idx]
-            boot = boot - boot.mean()  # centre under H₀
+            boot = ex0[idx]
             null_srs.append(np.sqrt(252) * boot.mean() / (boot.std() + 1e-10))
 
         p = float(np.mean(np.array(null_srs) >= obs_sr))
@@ -314,9 +386,14 @@ class StatisticalTests:
         return {"DSR": dsr, "sr_threshold_ann": thr_ann, "passes_dsr": dsr > 1.0}
 
     @staticmethod
-    def ic_significance(ic_series: pd.Series) -> Dict:
+    def ic_significance(ic_series: pd.Series, hac_lags: int = 0) -> Dict:
         """
-        One-sample t-test on the IC time series (H₀: mean IC = 0).
+        Test H₀: mean IC = 0 on the IC time series.
+
+        With ``hac_lags > 0`` the t-statistic uses a Newey-West standard error.
+        Use it when consecutive ICs come from overlapping training windows
+        (a 504-day window refitted monthly overlaps the next ~23 fits), which
+        makes a plain one-sample t-test treat ~23 near-copies as independent.
 
         ICIR = mean IC / std(IC) — the information ratio of the alpha signal.
         A rule of thumb: ICIR > 0.5 is considered a strong alpha signal.
@@ -329,7 +406,14 @@ class StatisticalTests:
         ic = ic_series.dropna()
         if len(ic) < 5:
             return {"error": "Insufficient observations (need ≥ 5)"}
-        t, p = stats.ttest_1samp(ic, popmean=0.0)
+        if hac_lags > 0:
+            import statsmodels.api as sm
+            fit = sm.OLS(ic.values, np.ones(len(ic))).fit(
+                cov_type="HAC", cov_kwds={"maxlags": min(hac_lags, len(ic) - 1)}
+            )
+            t, p = float(fit.tvalues[0]), float(fit.pvalues[0])
+        else:
+            t, p = stats.ttest_1samp(ic, popmean=0.0)
         icir = float(ic.mean() / ic.std()) if ic.std() > 0 else np.nan
         return {
             "mean_IC": float(ic.mean()),
@@ -375,13 +459,14 @@ class StatisticalTests:
             ic_vals = pd.Series(
                 {t: m.get("IC", np.nan) for t, m in all_ml_metrics.items()}
             ).dropna()
-            ic_res = cls.ic_significance(ic_vals)
-            if "error" not in ic_res:
-                print(f"\n[3] ML Signal IC (H₀: IC=0, n={len(ic_vals)} assets)")
+            if len(ic_vals):
+                # Descriptive only. A t-test across assets would treat highly
+                # correlated ETFs as independent draws; per-asset tests on the
+                # IC history (with HAC errors) are reported by the pipeline.
+                print(f"\n[3] ML Signal IC, latest fit (all {len(ic_vals)} assets, descriptive)")
                 print(
-                    f"    mean_IC={ic_res['mean_IC']:.4f}  ICIR={ic_res['ICIR']:.3f}  "
-                    f"p={ic_res['p_value']:.4f}  "
-                    f"{'✓ Significant' if ic_res['significant_5pct'] else '✗ Not significant'} at 5%"
+                    f"    mean_IC={ic_vals.mean():.4f}  median_IC={ic_vals.median():.4f}  "
+                    f"share_positive={(ic_vals > 0).mean():.0%}"
                 )
 
         print("=" * 55)

@@ -125,3 +125,22 @@ class TestGapFilling:
         prices = pd.Series([100] + [np.nan] * 8 + [109], index=dates, name="SPY")
         filled = prices.ffill(limit=5)
         assert np.isnan(filled.iloc[6])  # 6th gap exceeds limit
+
+
+def test_market_caps_fall_back_to_etf_total_assets(monkeypatch):
+    import src.data as d
+
+    class FI:
+        market_cap = None
+        last_price = None
+        shares = None
+
+    class T:
+        def __init__(self, t):
+            self.fast_info = FI()
+            self.info = {"totalAssets": {"A": 300.0, "B": 100.0}[t]}
+
+    monkeypatch.setattr(d.yf, "Ticker", T)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    caps = d.DataEngine("2020-01-01", "2021-01-01").fetch_market_caps(["A", "B"])
+    assert caps.to_dict() == {"A": 300.0, "B": 100.0}

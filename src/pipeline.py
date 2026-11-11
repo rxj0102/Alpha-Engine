@@ -22,6 +22,9 @@ A dict containing:
   - prices             : full price DataFrame
   - common_tickers     : tickers with complete price data
   - port_rets          : daily strategy return series
+  - eval_start         : first rebalance date; all comparisons start after it
+  - comparison         : DataFrame of ML+BL, BL-only, 1/N and SPY metrics on
+                         the evaluation window and each half of it
 """
 
 import logging
@@ -30,7 +33,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from src.backtest import PortfolioBacktester, StatisticalTests
+from src.backtest import PortfolioBacktester, StatisticalTests, comparison_table
 from src.config import Config, DEFAULT_CONFIG
 from src.data import DataEngine
 from src.ml_alpha import MLAlphaEngine
@@ -120,9 +123,9 @@ def run_walk_forward(cfg: Config = None) -> Dict:
             try:
                 m = ml_eng.train(X, y, t)
                 ic_history[t].append(m["IC"])
+                ml_metrics_all[t] = m  # every asset, not only IC > 0 (selection bias)
                 if m["IC"] > 0:
                     ml_views[t] = float(ml_eng.predict(X.iloc[-1:], t)[0])
-                    ml_metrics_all[t] = m
             except Exception:
                 pass
 
@@ -225,15 +228,40 @@ def run_walk_forward(cfg: Config = None) -> Dict:
         for k, v in ablation_metrics.items():
             print(f"  {k:<35} {v:>12}  (ML+BL: {m.get(k, '—'):>12})")
 
+    # ── 1/N baseline and like-for-like comparison ─────────────────────────
+    # Weights before the first rebalance are a 1/N placeholder, so every
+    # strategy is evaluated only after eval_start. 1/N uses the same
+    # universe, rebalance schedule and cost model as the strategy.
+    eval_start = min(weights_record)
+    ew = pd.DataFrame(1 / len(common_tickers), index=prices.index, columns=common_tickers)
+    ew_bt = PortfolioBacktester(bc.initial_capital, opt_cfg.risk_free_rate)
+    ew_ph = ew_bt.run(prices[common_tickers], ew, bc.rebalance_freq)
+    rets = {
+        "ML + BL": ph["portfolio_value"].pct_change(),
+        "1/N equal weight": ew_ph["portfolio_value"].pct_change(),
+    }
+    if bc.run_ablation and ablation_record:
+        rets["BL only"] = abl_bt.portfolio_history["portfolio_value"].pct_change()
+    if spy is not None:
+        rets["SPY"] = spy
+    comparison = comparison_table(rets, opt_cfg.risk_free_rate, spy,
+                                  start=eval_start, end=prices.index[-1])
+    print(f"\n  Comparison from first rebalance ({eval_start.date()}):")
+    print(comparison[comparison.window == "full"].to_string(index=False))
+
     # ── Statistical validation ─────────────────────────────────────────────
     port_rets = ph["portfolio_value"].pct_change().dropna()
-    StatisticalTests.report(ph, ml_metrics_all, n_trials=max(len(ml_metrics_all), 1),
+    port_rets = port_rets[port_rets.index > eval_start]
+    StatisticalTests.report(ph[ph.index >= eval_start], ml_metrics_all, n_trials=max(len(ml_metrics_all), 1),
                             rf=opt_cfg.risk_free_rate)
 
     print("\n  Per-asset IC significance:")
     for t, ics in ic_history.items():
         if len(ics) >= 5:
-            r = StatisticalTests.ic_significance(pd.Series(ics))
+            # Consecutive fits share all but one month of the training window.
+            r = StatisticalTests.ic_significance(
+                pd.Series(ics), hac_lags=bc.train_window // 21
+            )
             if "error" not in r:
                 sig = "✓" if r["significant_5pct"] else "✗"
                 print(
@@ -252,4 +280,25 @@ def run_walk_forward(cfg: Config = None) -> Dict:
         "prices": prices,
         "common_tickers": common_tickers,
         "port_rets": port_rets,
+        "eval_start": eval_start,
+        "comparison": comparison,
     }
+
+
+if __name__ == "__main__":
+    import json
+    from pathlib import Path
+
+    logging.basicConfig(level=logging.WARNING)
+    out = Path("outputs")
+    out.mkdir(exist_ok=True)
+    res = run_walk_forward()
+    res["comparison"].to_csv(out / "comparison.csv", index=False)
+    with open(out / "run_summary.json", "w") as fh:
+        json.dump({
+            "eval_start": str(res["eval_start"].date()),
+            "data_end": str(res["prices"].index[-1].date()),
+            "n_rebalances": int(len(res["weights_history"].drop_duplicates())),
+            "risk_free_rate": DEFAULT_CONFIG.optimizer.risk_free_rate,
+        }, fh, indent=2)
+    print("Wrote outputs/comparison.csv and outputs/run_summary.json")

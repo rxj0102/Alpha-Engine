@@ -100,19 +100,28 @@ class DataEngine:
         pd.Series
             Raw (un-normalised) market cap per ticker.
         """
+        import time
+
         caps: Dict[str, float] = {}
         for t in tickers:
+            mc = None
             try:
-                info = yf.Ticker(t).fast_info
+                tk = yf.Ticker(t)
+                info = tk.fast_info
                 mc = getattr(info, "market_cap", None)
                 if mc is None or np.isnan(float(mc)):
                     lp = getattr(info, "last_price", None)
                     sh = getattr(info, "shares", None)
                     mc = lp * sh if (lp and sh) else None
-                if mc:
-                    caps[t] = float(mc)
+                if not mc:
+                    # ETFs have no market cap in fast_info; fund AUM
+                    # (totalAssets) is the size measure Yahoo reports for them.
+                    mc = (tk.info or {}).get("totalAssets")
             except Exception:
-                pass
+                mc = None
+            if mc:
+                caps[t] = float(mc)
+            time.sleep(0.5)  # stay under Yahoo's rate limit
 
         if not caps:
             log.warning(

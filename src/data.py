@@ -115,6 +115,10 @@ class DataEngine:
                 pass
 
         if not caps:
+            log.warning(
+                "No market caps returned for %d tickers; using equal caps, so the "
+                "Black-Litterman prior is 1/N", len(tickers)
+            )
             return pd.Series(1.0, index=tickers)
 
         s = pd.Series(caps)

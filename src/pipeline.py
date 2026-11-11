@@ -123,9 +123,9 @@ def run_walk_forward(cfg: Config = None) -> Dict:
             try:
                 m = ml_eng.train(X, y, t)
                 ic_history[t].append(m["IC"])
+                ml_metrics_all[t] = m  # every asset, not only IC > 0 (selection bias)
                 if m["IC"] > 0:
                     ml_views[t] = float(ml_eng.predict(X.iloc[-1:], t)[0])
-                    ml_metrics_all[t] = m
             except Exception:
                 pass
 

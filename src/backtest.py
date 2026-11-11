@@ -459,13 +459,14 @@ class StatisticalTests:
             ic_vals = pd.Series(
                 {t: m.get("IC", np.nan) for t, m in all_ml_metrics.items()}
             ).dropna()
-            ic_res = cls.ic_significance(ic_vals)
-            if "error" not in ic_res:
-                print(f"\n[3] ML Signal IC (H₀: IC=0, n={len(ic_vals)} assets)")
+            if len(ic_vals):
+                # Descriptive only. A t-test across assets would treat highly
+                # correlated ETFs as independent draws; per-asset tests on the
+                # IC history (with HAC errors) are reported by the pipeline.
+                print(f"\n[3] ML Signal IC, latest fit (all {len(ic_vals)} assets, descriptive)")
                 print(
-                    f"    mean_IC={ic_res['mean_IC']:.4f}  ICIR={ic_res['ICIR']:.3f}  "
-                    f"p={ic_res['p_value']:.4f}  "
-                    f"{'✓ Significant' if ic_res['significant_5pct'] else '✗ Not significant'} at 5%"
+                    f"    mean_IC={ic_vals.mean():.4f}  median_IC={ic_vals.median():.4f}  "
+                    f"share_positive={(ic_vals > 0).mean():.0%}"
                 )
 
         print("=" * 55)

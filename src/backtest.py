@@ -289,7 +289,7 @@ class StatisticalTests:
         Circular block bootstrap procedure:
         1. Treat the return series as circular (wrapping around at the end)
         2. Randomly sample starting indices, take blocks of length b = 21
-        3. Centre each bootstrap sample at zero (enforces H₀: SR = 0)
+        3. Demean the observed series once (enforces H₀: SR = 0), then resample it
         4. Compute bootstrap SR; repeat B = 5000 times
         5. p-value = fraction of bootstrap SRs ≥ observed SR
 
@@ -306,13 +306,16 @@ class StatisticalTests:
         n = len(ex)
         obs_sr = float(np.sqrt(252) * ex.mean() / ex.std())
 
+        # Impose H0 once by demeaning the observed series, then resample it.
+        # Centring each bootstrap sample at its own mean (the previous code)
+        # makes every null Sharpe exactly zero, so p was 0 for any positive SR.
+        ex0 = ex - ex.mean()
         rng = np.random.default_rng(SEED)
         null_srs = []
         for _ in range(n_bootstrap):
             starts = rng.integers(0, n, size=n // block_size + 1)
             idx = np.concatenate([np.arange(s, s + block_size) % n for s in starts])[:n]
-            boot = ex[idx]
-            boot = boot - boot.mean()  # centre under H₀
+            boot = ex0[idx]
             null_srs.append(np.sqrt(252) * boot.mean() / (boot.std() + 1e-10))
 
         p = float(np.mean(np.array(null_srs) >= obs_sr))

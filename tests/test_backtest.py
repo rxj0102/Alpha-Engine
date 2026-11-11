@@ -223,3 +223,24 @@ class TestComparison:
         tbl = comparison_table({"G": r}, 0.0, None, start, end)
         n = tbl.set_index("window").n_days
         assert n["first_half"] + n["second_half"] == n["full"]
+
+
+class TestBootstrapNull:
+    def test_matches_analytic_pvalue_for_iid_returns(self):
+        """For iid returns the bootstrap p-value should be close to the
+        one-sided normal p-value 1 - Phi(SR * sqrt(years)). The old code gave
+        p = 0 for any positive Sharpe."""
+        from scipy.stats import norm
+        for seed in (3, 5, 8):
+            rng = np.random.default_rng(seed)
+            r = pd.Series(rng.normal(0.04 / 252 + 0.0001, 0.0065, 756))
+            out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=2000, rf=0.04)
+            analytic = 1 - norm.cdf(out["observed_sr"] * np.sqrt(756 / 252))
+            assert abs(out["p_value"] - analytic) < 0.06
+
+    def test_strong_signal_is_significant(self):
+        rng = np.random.default_rng(4)
+        r = pd.Series(rng.normal(0.04 / 252 + 0.002, 0.006, 1500))  # SR above 5
+        out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=1000, rf=0.04)
+        assert out["p_value"] < 0.01
+

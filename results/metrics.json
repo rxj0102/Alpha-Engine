@@ -1,0 +1,93 @@
+{
+  "config": {
+    "start": "2020-01-01",
+    "end": "2024-12-31",
+    "train_window": 504,
+    "horizon": 21,
+    "rebalance": "ME",
+    "risk_free": 0.04,
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "EFA",
+      "XLF",
+      "XLE",
+      "XLK",
+      "XLV",
+      "XLI",
+      "TLT",
+      "IEF",
+      "LQD",
+      "USO"
+    ]
+  },
+  "sample": {
+    "first_day": "2022-01-03",
+    "last_day": "2024-12-31",
+    "n_days": 753,
+    "eval_start": "2021-12-31"
+  },
+  "comparison": {
+    "ML + BL": {
+      "ann_return": 0.0013820591,
+      "ann_vol": 0.10374997,
+      "sharpe": -0.37222121,
+      "sortino": -0.58407373,
+      "max_drawdown": -0.20203033,
+      "beta": 0.42595662,
+      "alpha_ann": -0.039672693,
+      "n_days": 753
+    },
+    "1/N equal weight": {
+      "ann_return": 0.048836874,
+      "ann_vol": 0.13057238,
+      "sharpe": 0.067677973,
+      "sortino": 0.10041166,
+      "max_drawdown": -0.18574856,
+      "beta": 0.65606314,
+      "alpha_ann": -0.014396113,
+      "n_days": 753
+    },
+    "BL only": {
+      "ann_return": 0.02560094,
+      "ann_vol": 0.11094511,
+      "sharpe": -0.12978545,
+      "sortino": -0.2072984,
+      "max_drawdown": -0.20203033,
+      "beta": 0.47109261,
+      "alpha_ann": -0.01980413,
+      "n_days": 753
+    },
+    "US market (SPY stand-in)": {
+      "ann_return": 0.096382472,
+      "ann_vol": 0.18295768,
+      "sharpe": 0.30817221,
+      "sortino": 0.43925323,
+      "max_drawdown": -0.25449072,
+      "beta": 1.0,
+      "alpha_ann": 1.2490009e-16,
+      "n_days": 753
+    }
+  },
+  "tests": {
+    "bootstrap_sharpe": -0.37246862,
+    "bootstrap_p": 0.7442,
+    "dsr": -0.37779735,
+    "dsr_threshold": 0.98589525,
+    "dsr_n_trials": 13
+  },
+  "ic_in_training": {
+    "n_asset_rebalances": 481,
+    "mean": 0.0018414018,
+    "median": -0.028571429,
+    "share_positive": 0.4968815
+  },
+  "ic_live": {
+    "n_rebalances": 35,
+    "mean": 0.052904239,
+    "icir": 0.19723469,
+    "t_stat": 1.1668561,
+    "p_value": 0.25138755
+  }
+}

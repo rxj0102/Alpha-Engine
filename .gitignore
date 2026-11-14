@@ -41,3 +41,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# open data cache
+data/open_cache/

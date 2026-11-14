@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/rxj0102/Alpha-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/rxj0102/Alpha-Engine/actions/workflows/ci.yml)
 
-**A walk-forward, multi-regime systematic portfolio that pipes ML return forecasts through a Bayesian Black-Litterman framework to construct risk-adjusted allocations across 15 multi-asset ETFs.**
+**A walk-forward, multi-regime systematic portfolio that pipes ML return forecasts through a Bayesian Black-Litterman framework to construct risk-adjusted allocations across 13 multi-asset ETF stand ins built from free open data (FRED, Ken French Data Library).**
 
 ---
 
@@ -26,7 +26,7 @@ The standard practitioner implementation sets `τ = 1/n_assets` - a heuristic wi
 ### Pipeline
 
 ```
-Market Data (15 ETFs, 2020-2024)
+Market Data (13 open data ETF stand ins, 2020-2024)
          │
          ▼
   Feature Engineering          [WF-1] cutoff_date enforced per rebalance
@@ -67,7 +67,7 @@ Market Data (15 ETFs, 2020-2024)
 |---|---|---|
 | Feature cutoff | `cutoff_date` per rebalance | Full-sample features leak future vol/momentum |
 | ML stacking | OOF meta-learner then full refit | In-sample stacking inflates IC (magnitude not measured here) |
-| Covariance | Ledoit-Wolf shrinkage | Sample covariance is rank-deficient at T=504, N=15 |
+| Covariance | Ledoit-Wolf shrinkage | Sample covariance is noisy at T=504, N=13 |
 | τ scaling | `1/T`, not `1/N` | `1/N` overstates prior certainty by a factor of T/N ≈ 34 |
 | Vol model | GJR-GARCH (not GARCH) | Captures leverage effect; standard GARCH underestimates equity downside vol |
 | High-vol objective | Min-CVaR LP | CVaR is a coherent risk measure; MV ignores tail shape under non-normality |
@@ -76,12 +76,18 @@ Market Data (15 ETFs, 2020-2024)
 
 ### Asset universe
 
-| Class | Tickers | Role in portfolio |
+| Class | Label | Open data stand in |
 |---|---|---|
-| Broad equities | SPY, QQQ, IWM, EFA, EEM | Core equity beta; cross-sectional momentum signal |
-| Sector ETFs | XLF, XLE, XLK, XLV, XLI | Sector rotation; highest ML IC historically |
-| Fixed income | TLT, IEF, LQD | Duration and credit risk-off allocation |
-| Commodities | GLD, USO | Inflation hedge; low equity correlation in crisis |
+| Broad equities | SPY | Ken French US market (Mkt-RF + RF) |
+| | QQQ | FRED NASDAQ100 index |
+| | IWM | Ken French bottom 30% size portfolio |
+| | EFA | Ken French Developed ex US market (USD) |
+| Sectors | XLF, XLE, XLK, XLV, XLI | Ken French 12 industry portfolios: Money, Enrgy, BusEq, Hlth, Manuf |
+| Fixed income | TLT, IEF | 20y and 10y constant maturity Treasury par bonds priced from FRED DGS20, DGS10 |
+| | LQD | 12y Baa corporate par bond priced from FRED DBAA |
+| Commodities | USO | WTI spot, FRED DCOILWTICO |
+
+Labels keep the ETF names for readability; the returns are the open series on the right, loaded by `src/opendata.py`. EEM and GLD from the original 15 asset universe were dropped because no free daily source exists for them. Bond returns use r = y/252 - D dy + C dy^2 / 2 for a par bond at the prior day yield. With no open market cap data, the Black-Litterman prior is equal weight.
 
 ---
 
@@ -126,7 +132,7 @@ Grinold's Fundamental Law of Active Management connects IC to strategy value:
 
 $$IR \approx IC \cdot \sqrt{BR}$$
 
-where BR is breadth (number of independent bets per year). Monthly rebalancing across 15 assets gives BR ≈ 180, meaning even a modest IC of 0.03 can support an IR of ~0.4 before transaction costs.
+where BR is breadth (number of independent bets per year). Monthly rebalancing across 13 assets gives BR ≈ 156, meaning even a modest IC of 0.03 can support an IR of ~0.4 before transaction costs.
 
 ### Deflated Sharpe Ratio
 
@@ -140,33 +146,42 @@ where $\hat{E}[\max SR]$ is the expected maximum Sharpe across $N$ trials (appro
 
 ## Results
 
-Backtested **2020-01-01 - 2024-12-31** across the COVID crash (-34% SPY drawdown), 2022 rate shock (-18% SPY), and 2023-24 recovery - a stress-test that covers three distinct macro regimes.
+Produced by `make reproduce` (`python scripts/reproduce.py`, then `python scripts/render_readme.py`) on open data, 13 ETF stand-ins, monthly rebalance and the same cost model for every column. The block below is rendered from `results/metrics.json`; CI checks that it matches. Per-window and per-rebalance detail is in `results/comparison.csv`, `results/live_ic.csv` and `results/ic_summary.csv`.
 
-| Metric | ML + BL Strategy | BL-only (ablation) | SPY (benchmark) |
-|---|---|---|---|
-| Ann. Return | **10.70%** | 8.79% | 15.64% |
-| Ann. Volatility | **14.57%** | 14.53% | 19.52% |
-| Sharpe Ratio | **0.460** | 0.329 | 0.597 |
-| Sortino Ratio | **0.537** | 0.386 | 0.803 |
-| Max Drawdown | **-28.89%** | -28.89% | -33.93% |
-| Beta | 0.576 | 0.599 | 1.000 |
-| Alpha (ann.) | **+1.69%** | -0.59% | - |
+The walk-forward needs 504 days of training data, so the first rebalance is 2021-12-31. Before that the weights are a 1/N placeholder, so every column starts after the first rebalance; earlier versions of this table counted the placeholder, including the 2020 COVID crash, as strategy performance.
 
-> Results from `06_alpha_engine.ipynb` run on real market data (yfinance, adjusted close). Ann. Return is arithmetic (μ × 252) consistent across all columns. SPY statistics are computed from the same benchmark return series used to derive Beta and Alpha. The ablation column removes ML views while keeping BL + GARCH + CVaR identical, isolating the ML contribution.
+<!-- results:start (generated by scripts/render_readme.py, do not edit by hand) -->
+Evaluated from the first rebalance, 2022-01-03 to 2024-12-31 (753 trading days), with the same universe, monthly rebalance and costs for every strategy. 504-day training window, 21-day forecast horizon, 13 assets.
 
-> **Status of these numbers.** The table above was produced before the cross-validation purge fix (see Corrections below) and has not been regenerated, so treat it as a historical run, not a verified result. Re-run `notebooks/alpha_engine.ipynb` or `06_alpha_engine.ipynb` with live data to refresh it.
+| Metric | ML + BL | BL only | 1/N equal weight | US market (SPY stand-in) |
+|---|---|---|---|---|
+| Ann. return | 0.14% | 2.56% | 4.88% | 9.64% |
+| Ann. volatility | 10.37% | 11.09% | 13.06% | 18.30% |
+| Sharpe ratio | -0.372 | -0.130 | 0.068 | 0.308 |
+| Sortino ratio | -0.584 | -0.207 | 0.100 | 0.439 |
+| Max drawdown | -20.20% | -20.20% | -18.57% | -25.45% |
+| Beta to market | 0.426 | 0.471 | 0.656 | 1.000 |
+| Alpha (ann.) | -3.97% | -1.98% | -1.44% | 0.00% |
 
-Reading the table as it stands: the strategy has lower volatility and drawdown than SPY, but a lower Sharpe ratio (0.460 vs 0.597) and lower return over this bull-market sample. The ML views added about 0.13 Sharpe over the BL-only ablation in this one run, with no significance test that survives the issues below.
+- Effect of the ML views (ML + BL minus BL only): Sharpe -0.242, annual return -2.42%.
+- Against the 1/N baseline: Sharpe -0.440, annual return -4.75%.
+- Block-bootstrap Sharpe test: SR -0.372, p = 0.744.
+- Deflated Sharpe ratio (observed Sharpe divided by the multiple-testing threshold 0.986 for 13 trials; above 1 is significant): -0.378.
+- Live cross-sectional IC (forecast at each rebalance against the next 21 days, 35 non-overlapping rebalances): mean 0.053, ICIR 0.20, t = 1.17, p = 0.251. Values per rebalance are in results/live_ic.csv.
+- In-training out-of-fold IC (diagnostic, non-overlapping rows, 481 asset-rebalance pairs): mean 0.002, median -0.029, positive in 50%. Only assets with positive IC at a rebalance send a view to Black-Litterman.
+<!-- results:end -->
 
-**Statistical validation: not currently valid.**
-- Block-bootstrap Sharpe test: reported p = 0.000 for SR = 0.460. Not regenerated since the fix.
-- Deflated Sharpe Ratio: reported DSR = 0.368 against a threshold of 1.251, which fails with n_trials = 15. This figure also predates a variance-inflation correction. The conclusion is that the Sharpe is not distinguishable from a multiple-testing null.
-- Information coefficient: the earlier report of a mean IC of 0.44 with p = 0.000 is withdrawn. An IC that high for monthly ETF returns is implausible (honest values are typically 0.02 to 0.05), and the test was invalid for three reasons: (1) the 21-day forward-return labels overlap and the CV had no purge gap, so training labels leaked into test folds; (2) each IC is a pooled time-series Spearman over about four years, dominated by a few regimes, not a cross-sectional IC; (3) the t-test across the 15 per-asset ICs treats highly correlated assets as independent.
-- The per-asset IC table has been removed for the same reasons.
+**Reading this honestly.** The ML views do not help: ML + BL trails the BL-only ablation, the 1/N portfolio on the same universe and the US market on Sharpe, and neither the bootstrap test nor the deflated Sharpe ratio supports an edge. The live cross-sectional IC is small and not significant, so the forecasts carry little ranking information at this sample size. The Black-Litterman prior is 1/N because open data has no ETF market caps or fund sizes, so the BL-only column is close to a volatility-aware equal-weight portfolio.
 
 ## Corrections
 
-- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test. Results need a re-run to see the post-fix IC.
+- CV leakage: `TimeSeriesSplit` now uses `gap = horizon` so that labels of the last training rows cannot overlap the test fold. Covered by a regression test.
+- Warm-up counted as performance: metrics ran from the start of the price data, so roughly two years of 1/N placeholder weights were reported as strategy returns. All metrics and the significance report now start at the first rebalance.
+- 1/N baseline added: same universe, rebalance schedule and cost model as the strategy.
+- Bootstrap Sharpe test: each bootstrap sample was centred on its own mean, so every null Sharpe was zero and p was 0 for any positive Sharpe. The observed series is now demeaned once and then resampled.
+- IC inflation, three causes: the meta-learner was scored on the rows it was fitted on (now walk-forward); the Spearman IC used overlapping 21-day forward returns (now non-overlapping rows only); and the IC summary averaged only assets whose IC was positive. The headline IC is now the live cross-sectional IC, one value per rebalance on non-overlapping windows; the in-training IC is a labelled diagnostic.
+- Data: Yahoo Finance was replaced by open data (FRED, Ken French). Each ETF maps to the closest open series (table above in Methodology), and GLD and EEM were dropped because no open daily series stands in for them.
+- Results above regenerated on 2026-11-14 after all of these changes, with the inputs frozen in `data/snapshot/`.
 
 ---
 
@@ -266,7 +281,7 @@ jupyter notebook notebooks/alpha_engine.ipynb
 
 | Category | Library | Used for |
 |---|---|---|
-| Data | `yfinance` | Adjusted close + market cap retrieval |
+| Data | `src/opendata.py` | FRED and Ken French downloads (cached), ETF stand ins, par bond pricing |
 | ML | `scikit-learn` | RF, GBM, SVR, Ridge; StandardScaler; LedoitWolf |
 | Volatility | `arch` | GJR-GARCH(1,1,1) with skewed-t distribution |
 | Optimisation | `cvxpy` | MV QP and Min-CVaR LP (CLARABEL/OSQP/ECOS cascade) |
@@ -287,3 +302,10 @@ jupyter notebook notebooks/alpha_engine.ipynb
 - Ledoit, O. & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365-411.
 - Grinold, R. (1989). The fundamental law of active management. *Journal of Portfolio Management*, 15(3), 30-37.
 - Artzner, P., Delbaen, F., Eber, J.-M. & Heath, D. (1999). Coherent measures of risk. *Mathematical Finance*, 9(3), 203-228.
+## Data snapshot
+
+`results/open_data_manifest.json` records every open data file behind the results above (SHA-256, rows, first and last date). Ken French and FRED occasionally revise history; after a fresh download, check whether the inputs still match with:
+
+```bash
+python -c "from src.opendata import verify_manifest; print(verify_manifest('results/open_data_manifest.json'))"
+```

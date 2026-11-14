@@ -1,8 +1,7 @@
 # Alpha Engine — Python dependencies
 # Tested on Python 3.10+
 
-# Data
-yfinance>=0.2.36
+# Data: FRED and Ken French via src/opendata.py (standard library only)
 
 # Numerical / data
 numpy>=1.24

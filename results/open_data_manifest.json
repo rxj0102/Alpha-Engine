@@ -1,0 +1,77 @@
+{
+  "generated_utc": "2026-11-14T18:02:20Z",
+  "sources": {
+    "fred": "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
+    "french": "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip",
+    "github": {
+      "vix_daily": "https://raw.githubusercontent.com/datasets/finance-vix/main/data/vix-daily.csv",
+      "sp500_monthly_shiller": "https://raw.githubusercontent.com/datasets/s-and-p-500/main/data/data.csv",
+      "sp500_constituents": "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+    }
+  },
+  "files": {
+    "fred_DBAA.csv": {
+      "sha256": "4ddf509580b0fce57ee5f65a60c7e0127a19bd34ee317400ff236fd736f3110c",
+      "bytes": 170047,
+      "rows": 10661,
+      "first": "1986-01-02",
+      "last": "2026-11-12"
+    },
+    "fred_DCOILWTICO.csv": {
+      "sha256": "2bab6974f96b57b1fe1bdfe6fd2edd44ae041dc135060dddc479ef1994a02bc3",
+      "bytes": 176237,
+      "rows": 10660,
+      "first": "1986-01-02",
+      "last": "2026-11-11"
+    },
+    "fred_DGS10.csv": {
+      "sha256": "ef864cd0a56c983f248fb34b46fc6f4e2b35bcee54b10cb5d0332ebfaea99d5b",
+      "bytes": 269391,
+      "rows": 16923,
+      "first": "1962-01-02",
+      "last": "2026-11-12"
+    },
+    "fred_DGS20.csv": {
+      "sha256": "0341ee6fdb3f01997bc8db0be368a17ce9135ad9fcce95ca086f8705277b8fa5",
+      "bytes": 262660,
+      "rows": 16923,
+      "first": "1962-01-02",
+      "last": "2026-11-12"
+    },
+    "fred_NASDAQ100.csv": {
+      "sha256": "5dd81ff48f790747a6b24d786b7321205dc8138340c990d431a9eb0335883730",
+      "bytes": 208923,
+      "rows": 10661,
+      "first": "1986-01-02",
+      "last": "2026-11-13"
+    },
+    "french_12_Industry_Portfolios_daily_0.csv": {
+      "sha256": "cec21941c20acdc75d3cd1fdfda4313d2e29ee7416ff9e4935d53a96cc44b107",
+      "bytes": 1963793,
+      "rows": 26338,
+      "first": "19260701",
+      "last": "20260930"
+    },
+    "french_Developed_ex_US_3_Factors_Daily_0.csv": {
+      "sha256": "b713024218b28a29183648378bdbedabd8ba26bfc9f286d5f1aa332271327d40",
+      "bytes": 287759,
+      "rows": 9458,
+      "first": "19900702",
+      "last": "20260930"
+    },
+    "french_F-F_Research_Data_Factors_daily_0.csv": {
+      "sha256": "270abc38fd9cabb9f3c84cfab5339ef0492e3c61758e8d3284f0b869678c76b0",
+      "bytes": 801297,
+      "rows": 26338,
+      "first": "19260701",
+      "last": "20260930"
+    },
+    "french_Portfolios_Formed_on_ME_daily_0.csv": {
+      "sha256": "a6e533648e37845470fa517182ae60ed28773b026816c6f4f196fd9fe44e2eec",
+      "bytes": 3001462,
+      "rows": 26338,
+      "first": "19260701",
+      "last": "20260930"
+    }
+  }
+}

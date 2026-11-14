@@ -88,6 +88,7 @@ def run_walk_forward(cfg: Config = None) -> Dict:
     ablation_record: Dict = {}
     ml_metrics_all: Dict = {}
     ic_history: Dict[str, list] = {t: [] for t in universe}
+    live_preds: Dict = {}  # reb_date -> {ticker: forecast}, for the live cross-sectional IC
 
     for i, reb_date in enumerate(reb_dates):
         loc = prices.index.get_loc(reb_date)
@@ -120,8 +121,10 @@ def run_walk_forward(cfg: Config = None) -> Dict:
             try:
                 m = ml_eng.train(X, y, t)
                 ic_history[t].append(m["IC"])
+                pred = float(ml_eng.predict(X.iloc[-1:], t)[0])
+                live_preds.setdefault(reb_date, {})[t] = pred
                 if m["IC"] > 0:
-                    ml_views[t] = float(ml_eng.predict(X.iloc[-1:], t)[0])
+                    ml_views[t] = pred
                     ml_metrics_all[t] = m
             except Exception:
                 pass
@@ -230,7 +233,18 @@ def run_walk_forward(cfg: Config = None) -> Dict:
     StatisticalTests.report(ph, ml_metrics_all, n_trials=max(len(ml_metrics_all), 1),
                             rf=opt_cfg.risk_free_rate)
 
-    print("\n  Per-asset IC significance:")
+    # Live cross-sectional IC: at each rebalance, rank correlation across assets
+    # between the forecast made with data up to that date and the realised
+    # forward return over the next `horizon` trading days. Monthly rebalances
+    # with a 21-day horizon give non-overlapping windows.
+    live_ic = StatisticalTests.live_cross_sectional_ic(live_preds, prices, ml_cfg.horizon)
+    lic = StatisticalTests.ic_significance(live_ic)
+    print("\n  Live cross-sectional IC (one value per rebalance, non-overlapping):")
+    if "error" not in lic:
+        print(f"    n={len(live_ic.dropna())}  mean_IC={lic['mean_IC']:.3f}  ICIR={lic['ICIR']:.2f}  "
+              f"t={lic['t_stat']:.2f}  p={lic['p_value']:.3f}")
+
+    print("\n  Per-asset in-training OOF IC (pooled time series, overlapping labels; diagnostic only):")
     for t, ics in ic_history.items():
         if len(ics) >= 5:
             r = StatisticalTests.ic_significance(pd.Series(ics))
@@ -252,4 +266,6 @@ def run_walk_forward(cfg: Config = None) -> Dict:
         "prices": prices,
         "common_tickers": common_tickers,
         "port_rets": port_rets,
+        "live_ic": live_ic,
+        "live_ic_stats": lic,
     }

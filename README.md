@@ -160,12 +160,13 @@ Backtested **2020-01-01 - 2024-12-31** across the COVID crash (-34% SPY drawdown
 
 > Results from `python run_open_data.py` on open data (FRED, Ken French), saved in `results/open_data_metrics.json` and `results/run_log.txt`. The backtest runs 2020-01-02 to 2024-12-31; the first model rebalance is 2021-12-31 (504 day training window), so 2020 and 2021 are held at equal weight as a warm-up. That warm-up is identical in both strategy columns, which is why their max drawdown (March 2020) matches. Ann. Return is arithmetic (mean x 252) in all columns, and the SPY column uses the same window and formulas. Sharpe uses a 4% risk free rate.
 
-Reading the table: on open data the ML views do not add value. The BL-only ablation has a slightly higher Sharpe (0.371 vs 0.357), and both trail the US market stand in on Sharpe while running about two thirds of its volatility.
+Reading the table: on open data the ML views do not add value to the portfolio, even though the live IC is mildly positive. One plausible reason, not tested here, is that the 30% weight cap and Black-Litterman shrinkage toward an equal prior leave a weak ranking signal little room to move the weights. The BL-only ablation has a slightly higher Sharpe (0.371 vs 0.357), and both trail the US market stand in on Sharpe while running about two thirds of its volatility.
 
 **Statistical validation**
 - Block-bootstrap Sharpe test: SR = 0.357, p = 0.000 against SR = 0. This only says the strategy made money over the sample; it says nothing about skill relative to the benchmark.
 - Deflated Sharpe Ratio: DSR = 0.460 against a threshold of 0.776 with n_trials = 13, so it fails. The Sharpe is not distinguishable from a multiple-testing null.
-- Information coefficient: the pipeline still reports a mean per-asset IC of 0.52 (ICIR 3.49), with every asset between 0.46 and 0.55. That is not credible for monthly ETF returns (honest values are typically 0.02 to 0.05) and the fact that the ML views do not beat the BL-only ablation confirms it. The purge gap fix removed one leak, but the IC is still a pooled time-series Spearman on overlapping 21-day labels, so it remains inflated. It is reported here only as a known open issue, not as evidence of skill.
+- Information coefficient (live, cross-sectional): at each of 35 monthly rebalances with a full forward window, the forecasts made with data up to that date are rank-correlated across the 13 assets with their realised returns over the next 21 trading days. Windows do not overlap. Mean IC = 0.118, ICIR = 0.29, t = 1.72, p = 0.095; the IC is positive in 25 of 35 months. That is a plausible size for a real but weak signal and is not significant at 5%. The per-month values are in `results/open_data_metrics.json` (`live_ic`).
+- The in-training out-of-fold IC (0.52 averaged over assets) is still printed as a diagnostic, but it is inflated: it is a pooled time-series Spearman on overlapping 21-day labels, not a cross-sectional ranking. It is not used as evidence of skill.
 
 ## Corrections
 

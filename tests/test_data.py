@@ -115,3 +115,21 @@ class TestGapFilling:
         prices = pd.Series([100] + [np.nan] * 8 + [109], index=dates, name="SPY")
         filled = prices.ffill(limit=5)
         assert np.isnan(filled.iloc[6])  # 6th gap exceeds limit
+
+
+class TestLiveIC:
+    def test_perfect_forecast_gives_ic_one(self):
+        from src.backtest import StatisticalTests
+        idx = pd.bdate_range("2023-01-02", periods=60)
+        growth = np.linspace(0.0, 0.01, 6)
+        prices = pd.DataFrame({f"A{i}": 100 * (1 + g) ** np.arange(60) for i, g in enumerate(growth)}, index=idx)
+        preds = {idx[10]: {f"A{i}": g for i, g in enumerate(growth)}}
+        ic = StatisticalTests.live_cross_sectional_ic(preds, prices, horizon=21)
+        assert ic.iloc[0] == pytest.approx(1.0)
+
+    def test_skips_dates_without_forward_window(self):
+        from src.backtest import StatisticalTests
+        idx = pd.bdate_range("2023-01-02", periods=30)
+        prices = pd.DataFrame({f"A{i}": np.arange(30) + 100.0 + i for i in range(6)}, index=idx)
+        preds = {idx[20]: {f"A{i}": float(i) for i in range(6)}}
+        assert StatisticalTests.live_cross_sectional_ic(preds, prices, horizon=21).empty

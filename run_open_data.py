@@ -25,6 +25,8 @@ spy = out["spy_returns"].dropna()
 spy = spy.loc[out["port_rets"].index.min():out["port_rets"].index.max()]
 res["spy"] = {"ann_return": float(spy.mean() * 252), "ann_vol": float(spy.std() * np.sqrt(252)),
               "sharpe": float((spy.mean() * 252 - 0.04) / (spy.std() * np.sqrt(252)))}
+res["live_ic_stats"] = {k: (bool(v) if isinstance(v, (bool, np.bool_)) else v) for k, v in out["live_ic_stats"].items()}
+res["live_ic"] = {str(k.date()): v for k, v in out["live_ic"].items()}
 for k in ("stat_tests", "statistical_tests", "sharpe_test", "dsr"):
     if k in out:
         res[k] = out[k]

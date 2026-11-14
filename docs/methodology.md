@@ -65,14 +65,13 @@ The Ridge meta-learner learns the optimal time-varying mixture of these four sig
 1. Split the training data into 5 folds using `TimeSeriesSplit` (no shuffling — past to future ordering strictly maintained).
 2. For each fold, fit base models on the training portion and predict on the held-out portion.
 3. Assemble OOF predictions across all folds — every observation has exactly one prediction made using only past data.
-4. Fit the meta-learner on these OOF predictions. The resulting IC and R² are unbiased estimates of out-of-sample performance.
+4. Evaluate the meta-learner walk-forward on these OOF predictions: fit it on earlier OOF rows and score it on later ones (with the same purge gap). The IC is computed only on rows that neither the base models nor the meta-learner were fit on. An earlier version fit and scored the meta-learner on the same OOF rows; on pure-noise targets that reported mean IC 0.125 with 12 of 12 runs positive.
 
 **Stage 2 (deployment)**:
 5. Refit all base models on the full training window.
-6. Generate base predictions on the full training window (these are in-sample, which is intentional for Stage 2).
-7. Refit the meta-learner on these full-data base predictions.
+6. Fit the meta-learner on the Stage 1 OOF base predictions, as scikit-learn's StackingRegressor does. An earlier version fit it on in-sample base predictions from step 5, which repeats the naive-stacking problem above.
 
-The deployed model is the Stage 2 model. It is trained on more data than any single fold in Stage 1, and its meta-learner is calibrated to the same base-model predictions it will see at inference time. Without Stage 2, we would deploy a model trained on ~80% of the training data (the last CV fold), creating a systematic discrepancy.
+The deployed base models use the full window, and the meta-learner weights reflect how each base model performs out of sample.
 
 ### 3.3 IC filter for view generation
 
@@ -192,7 +191,7 @@ ICIR = $\bar{IC} / \sigma_{IC}$ is reported alongside the p-value. An ICIR > 0.5
 
 **Single-country bias**: The universe is US-listed ETFs (including international equity ETFs, but traded in USD). This introduces implicit USD currency exposure and US market hours constraints. An extension to non-USD instruments would require FX hedging assumptions.
 
-**Look-ahead in market caps**: Market caps are fetched at the time the script is run, not at each historical rebalance date. This is a minor source of look-ahead for the BL equilibrium prior, but its effect is small because market-cap weights change slowly.
+**Market caps for the prior**: Yahoo Finance publishes no market cap or share count for ETFs, so `fetch_market_caps` falls back to equal weights for the default universe and the BL prior is the equal-weight equilibrium. If real caps were available they would be current values, not values at each rebalance date, which is a mild look-ahead.
 
 **ML signal decay**: The 21-day forecast horizon is fixed. There is no adaptation to changing signal half-lives. In low-IC environments (e.g. early 2020 COVID period), views are likely noisy but still forwarded to BL as long as IC > 0 over the training window.
 

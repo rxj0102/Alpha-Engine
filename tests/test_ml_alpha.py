@@ -172,3 +172,27 @@ def test_cv_purges_horizon_rows_between_train_and_test(monkeypatch):
     y = pd.Series(rng.normal(size=400))
     MLAlphaEngine(cfg).train(X, y, "TEST")
     assert seen.get("gap") == cfg.horizon
+
+
+class TestMetaLearnerNotScoredInSample:
+    """The stacking Ridge must not be fit and scored on the same rows.
+
+    On pure-noise targets an in-sample meta-learner reports a positive IC
+    almost every time (it can flip the sign of any base prediction after
+    seeing outcomes). The cross-fitted IC must not show that bias.
+    """
+
+    def test_noise_ic_not_biased_positive(self):
+        from src.config import MLConfig
+        cfg = MLConfig(rf_n_estimators=30, gbr_n_estimators=30, horizon=5)
+        ics = []
+        for seed in range(12):
+            rng = np.random.default_rng(seed)
+            n = 300
+            X = pd.DataFrame(rng.standard_normal((n, 4)), columns=list("abcd"))
+            y = pd.Series(rng.standard_normal(n))
+            ics.append(MLAlphaEngine(cfg).train(X, y, "T")["IC"])
+        ics = np.array(ics)
+        # Old in-sample meta scoring: mean IC 0.125, 12 of 12 positive. Fixed: 0.003, 6 of 12.
+        assert abs(ics.mean()) < 0.08
+        assert (ics > 0).mean() < 0.85

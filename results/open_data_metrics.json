@@ -1,0 +1,48 @@
+{
+  "strategy": {
+    "Ann. Return": "9.27%",
+    "Ann. Volatility": "14.76%",
+    "Sharpe Ratio": "0.357",
+    "Sortino Ratio": "0.415",
+    "Max Drawdown": "-30.64%",
+    "Beta": "0.555",
+    "Alpha (ann.)": "0.59%"
+  },
+  "ablation": {
+    "Ann. Return": "9.50%",
+    "Ann. Volatility": "14.83%",
+    "Sharpe Ratio": "0.371",
+    "Sortino Ratio": "0.430",
+    "Max Drawdown": "-30.64%",
+    "Beta": "0.569",
+    "Alpha (ann.)": "0.61%"
+  },
+  "start": "2020-01-02",
+  "end": "2024-12-31",
+  "assets": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "EFA",
+    "XLF",
+    "XLE",
+    "XLK",
+    "XLV",
+    "XLI",
+    "TLT",
+    "IEF",
+    "LQD",
+    "USO"
+  ],
+  "spy": {
+    "start": "2020-01-03",
+    "end": "2024-12-31",
+    "n": 1257,
+    "ann_return": 0.1563923627684968,
+    "ann_vol": 0.2187192957847348,
+    "sharpe": 0.5321540669326728,
+    "sortino": 0.6564153503294695,
+    "mdd": -0.34216280934892906
+  },
+  "notes": "Backtest 2020-01-02 to 2024-12-31. First model rebalance 2021-12-31; before that the portfolio is equal weight (training warm-up). SPY column uses the same window and formulas."
+}

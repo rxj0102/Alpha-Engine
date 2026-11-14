@@ -2,7 +2,7 @@
 tests/test_data.py — Unit tests for DataEngine.
 
 Tests cover:
-- _extract_close: flat and MultiIndex column formats
+- open data helpers: par bond returns, equal BL prior
 - engineer_features: output shape, no look-ahead, feature completeness
 - ffill gap-filling behaviour
 """
@@ -40,29 +40,19 @@ def data_engine(price_df):
     return de
 
 
-# ── Tests: _extract_close ──────────────────────────────────────────────────────
+# ── Tests: open data helpers ───────────────────────────────────────────────────
 
-class TestExtractClose:
-    def test_flat_columns(self):
-        df = pd.DataFrame({"Close": [100, 101, 102]})
-        result = DataEngine._extract_close(df, "SPY")
-        assert result is not None
-        assert len(result) == 3
+class TestOpenData:
+    def test_par_bond_returns_sign(self):
+        from src.opendata import par_bond_returns
+        y = pd.Series([4.0, 4.0, 4.5, 4.0], index=pd.date_range("2024-01-01", periods=4))
+        r = par_bond_returns(y, 10)
+        assert r.iloc[1] < 0 < r.iloc[2]          # yield up, price down
+        assert abs(r.iloc[0] - 0.04 / 252) < 1e-12  # flat yield earns carry
 
-    def test_multiindex_columns(self):
-        idx = pd.MultiIndex.from_tuples([("Close", "SPY"), ("Volume", "SPY")])
-        df = pd.DataFrame([[100, 1000], [101, 1200]], columns=idx)
-        result = DataEngine._extract_close(df, "SPY")
-        assert result is not None
-        assert result.iloc[0] == 100
-
-    def test_empty_dataframe(self):
-        result = DataEngine._extract_close(pd.DataFrame(), "SPY")
-        assert result is None
-
-    def test_none_input(self):
-        result = DataEngine._extract_close(None, "SPY")
-        assert result is None
+    def test_equal_prior_weights(self):
+        caps = DataEngine("2020-01-01", "2020-12-31").fetch_market_caps(["SPY", "TLT"])
+        assert (caps == 1.0).all()
 
 
 # ── Tests: engineer_features ───────────────────────────────────────────────────

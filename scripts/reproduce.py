@@ -1,17 +1,19 @@
 """Run the walk-forward backtest with the notebook configuration and write results/.
 
 Writes:
-  results/metrics.json      strategy, BL-only ablation and SPY statistics
-  results/ic_summary.csv    per-asset cross-fitted OOF IC across rebalances
-  results/daily_returns.csv strategy and SPY daily returns
+  results/metrics.json      like-for-like comparison (ML + BL, BL only, 1/N, US market),
+                            significance tests and IC statistics
+  results/comparison.csv    the same comparison on the full window and each half
+  results/ic_summary.csv    per-asset in-training out-of-fold IC across rebalances
+  results/live_ic.csv       live cross-sectional IC, one value per rebalance
+  results/daily_returns.csv strategy and benchmark daily returns
 
 The README Results block is rendered from these files by scripts/render_readme.py.
 
-Data: yfinance adjusted close (free, no key). Yahoo can serve slightly different
-history on different days, which moved per-asset IC between two runs, and the
-ETF market caps used as Black-Litterman prior weights are live values. Both
-inputs are frozen in data/snapshot/ and reused. Pass --refresh to download
-again and overwrite the snapshot.
+Data: free open sources with no API key (FRED, the Ken French Data Library), loaded
+by src/opendata.py. Each ETF is replaced by the closest open series; the mapping is
+in the README. The downloaded prices are frozen in data/snapshot/ so reruns give
+identical numbers. Pass --refresh to download again and overwrite the snapshot.
 """
 from __future__ import annotations
 
@@ -108,12 +110,8 @@ def main() -> None:
     res = run_walk_forward(CFG)
     rf = CFG.optimizer.risk_free_rate
     port = res["port_rets"]
-    spy = res["spy_returns"].reindex(port.index).dropna()
-
-    strat = _parse(res["metrics"])
-    abl = _parse(res["ablation_metrics"])
-    bench = _stats(spy, rf)
-    bench.update({"Beta": 1.0})
+    bench = res["spy_returns"].reindex(port.index).dropna()
+    comp = res["comparison"]
 
     bbs = StatisticalTests.block_bootstrap_sharpe(port, rf=rf)
     n_trials = len(CFG.universe)
@@ -130,27 +128,38 @@ def main() -> None:
                          "share_IC_positive": (a > 0).mean()})
     ic = pd.DataFrame(rows)
     all_ic = np.concatenate([np.asarray(v, float) for v in res["ic_history"].values() if len(v)])
+    live = res["live_ic"].dropna()
+    lic = res["live_ic_stats"]
 
     out = ROOT / "results"
     out.mkdir(exist_ok=True)
     ic.round(4).to_csv(out / "ic_summary.csv", index=False)
-    pd.DataFrame({"strategy": port, "spy": spy}).to_csv(
+    live.round(6).rename_axis("rebalance").to_csv(out / "live_ic.csv")
+    comp.round(6).to_csv(out / "comparison.csv", index=False)
+    pd.DataFrame({"strategy": port, "benchmark": bench}).to_csv(
         out / "daily_returns.csv", float_format="%.8f", index_label="date")
+
+    full = comp[comp.window == "full"].set_index("strategy")
+    keep = ["ann_return", "ann_vol", "sharpe", "sortino", "max_drawdown", "beta", "alpha_ann", "n_days"]
     payload = {
         "config": {"start": CFG.backtest.start_date, "end": CFG.backtest.end_date,
                    "train_window": CFG.backtest.train_window, "horizon": CFG.ml.horizon,
-                   "rebalance": CFG.backtest.rebalance_freq, "risk_free": rf},
+                   "rebalance": CFG.backtest.rebalance_freq, "risk_free": rf,
+                   "universe": list(res["prices"].columns)},
         "sample": {"first_day": str(port.index[0].date()), "last_day": str(port.index[-1].date()),
-                   "n_days": int(len(port))},
-        "strategy": strat,
-        "ablation_bl_only": abl,
-        "spy": bench,
+                   "n_days": int(len(port)), "eval_start": str(pd.Timestamp(res["eval_start"]).date())},
+        "comparison": {name: {k: (float(r[k]) if k != "n_days" else int(r[k])) for k in keep if k in r}
+                       for name, r in full.iterrows()},
         "tests": {"bootstrap_sharpe": float(bbs["observed_sr"]),
                   "bootstrap_p": float(bbs["p_value"]),
                   "dsr": float(dsr["DSR"]), "dsr_threshold": float(dsr["sr_threshold_ann"]),
                   "dsr_n_trials": n_trials},
-        "ic": {"n_asset_rebalances": int(len(all_ic)), "mean": float(all_ic.mean()),
-               "median": float(np.median(all_ic)), "share_positive": float((all_ic > 0).mean())},
+        "ic_in_training": {"n_asset_rebalances": int(len(all_ic)), "mean": float(np.nanmean(all_ic)),
+                           "median": float(np.nanmedian(all_ic)),
+                           "share_positive": float((all_ic > 0).mean())},
+        "ic_live": {"n_rebalances": int(len(live)), "mean": float(lic.get("mean_IC", np.nan)),
+                    "icir": float(lic.get("ICIR", np.nan)), "t_stat": float(lic.get("t_stat", np.nan)),
+                    "p_value": float(lic.get("p_value", np.nan))},
     }
     payload = rounded(payload)
     (out / "metrics.json").write_text(json.dumps(payload, indent=2) + "\n")

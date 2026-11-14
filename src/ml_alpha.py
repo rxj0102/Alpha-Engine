@@ -155,24 +155,6 @@ class MLAlphaEngine:
             ("ridge", Ridge(alpha=cfg.ridge_alpha)),
         ]
 
-    def _cross_fit_meta(self, meta_X: np.ndarray, meta_y: np.ndarray):
-        """Walk-forward predictions of the meta Ridge on rows it was not fit on.
-
-        Returns (predictions, matching actuals). Uses the same purge gap as the
-        base-model CV because 21-day labels overlap across adjacent rows.
-        """
-        n_splits = max(2, self.cfg.n_cv_splits - 2)
-        cv = TimeSeriesSplit(n_splits=n_splits, gap=self.cfg.horizon)
-        preds, acts = [], []
-        for tr, te in cv.split(meta_X):
-            sc = StandardScaler()
-            m = Ridge(alpha=self.cfg.meta_ridge_alpha)
-            m.fit(sc.fit_transform(meta_X[tr]), meta_y[tr])
-            preds.append(m.predict(sc.transform(meta_X[te])))
-            acts.append(meta_y[te])
-        return np.concatenate(preds), np.concatenate(acts)
-
-    # ── Training ───────────────────────────────────────────────────────────
 
     def train(self, X: pd.DataFrame, y: pd.Series, ticker: str) -> Dict:
         """
@@ -205,7 +187,9 @@ class MLAlphaEngine:
         actuals = np.full(n, np.nan)
 
         # Stage 1: OOF walk-forward CV (per-fold scaling to prevent leakage)
+        folds = []
         for train_idx, test_idx in tscv.split(X):
+            folds.append(test_idx)
             scaler = StandardScaler()
             Xtr_s = scaler.fit_transform(X.iloc[train_idx])
             Xte_s = scaler.transform(X.iloc[test_idx])
@@ -214,18 +198,36 @@ class MLAlphaEngine:
                 oof[name][test_idx] = m.predict(Xte_s)
             actuals[test_idx] = y.iloc[test_idx].values
 
-        valid = ~np.isnan(actuals)
-        meta_X_oof = np.column_stack([oof[name][valid] for name, _ in base_models])
+        # Meta-learner evaluated walk-forward too: fold k is scored by a meta
+        # model fitted only on the OOF rows of folds before k (purged by the
+        # horizon). Fitting the meta model on all OOF rows and scoring the same
+        # rows makes the second stage in-sample and inflates the reported IC.
+        base_oof = np.column_stack([oof[name] for name, _ in base_models])
+        meta_pred = np.full(n, np.nan)
+        h = self.cfg.horizon
+        for k in range(1, len(folds)):
+            test_idx = folds[k]
+            hist = np.concatenate(folds[:k])
+            hist = hist[hist < test_idx[0] - h]
+            if len(hist) < 20:
+                continue
+            sc = StandardScaler()
+            mk = Ridge(alpha=self.cfg.meta_ridge_alpha)
+            mk.fit(sc.fit_transform(base_oof[hist]), actuals[hist])
+            meta_pred[test_idx] = mk.predict(sc.transform(base_oof[test_idx]))
+
+        valid = ~np.isnan(meta_pred)
         meta_y_oof = actuals[valid]
+        oof_preds = meta_pred[valid]
 
-        # Cross-fitted meta-learner: the stacking Ridge is itself evaluated
-        # walk-forward on the OOF rows. Fitting and scoring it on the same rows
-        # lets it flip the sign of base predictions after seeing the outcomes,
-        # which made the reported IC positive even when every base model had
-        # negative out-of-fold IC.
-        oof_preds, meta_y_eval = self._cross_fit_meta(meta_X_oof, meta_y_oof)
+        meta_y_eval = meta_y_oof
 
-        oof_ic = self._ic(meta_y_eval, oof_preds)
+        # IC on non-overlapping rows only. Consecutive h-day forward returns
+        # share h-1 days, so a Spearman over every row of two smooth series is
+        # badly inflated: on pure random walks it averaged |IC| = 0.28 here.
+        step = max(1, h)
+        ic_y, ic_p = np.asarray(meta_y_eval)[::step], np.asarray(oof_preds)[::step]
+        oof_ic = self._ic(ic_y, ic_p) if len(ic_y) >= 5 else np.nan
         oof_r2 = r2_score(meta_y_eval, oof_preds) if len(oof_preds) > 1 else np.nan
         try:
             cal_slope = float(np.polyfit(meta_y_eval, oof_preds, 1)[0])
@@ -244,7 +246,8 @@ class MLAlphaEngine:
         # random forest), which is not how the models behave at inference.
         meta_scaler_final = StandardScaler()
         meta_final = Ridge(alpha=self.cfg.meta_ridge_alpha)
-        meta_final.fit(meta_scaler_final.fit_transform(meta_X_oof), meta_y_oof)
+        ok = ~np.isnan(base_oof).any(axis=1) & ~np.isnan(actuals)
+        meta_final.fit(meta_scaler_final.fit_transform(base_oof[ok]), actuals[ok])
 
         self.models[ticker] = {name: m for name, m in base_models}
         self.models[ticker].update({"meta": meta_final, "meta_scaler": meta_scaler_final})

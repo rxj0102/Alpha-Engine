@@ -314,6 +314,32 @@ class StatisticalTests:
         return {"DSR": dsr, "sr_threshold_ann": thr_ann, "passes_dsr": dsr > 1.0}
 
     @staticmethod
+    def live_cross_sectional_ic(
+        preds: Dict, prices: pd.DataFrame, horizon: int
+    ) -> pd.Series:
+        """
+        Cross-sectional Spearman IC per rebalance date.
+
+        preds maps rebalance date -> {ticker: forecast made with data up to that
+        date}. The realised return for each ticker is the price change from the
+        rebalance date to `horizon` trading days later. Dates without a full
+        forward window, or with fewer than 5 assets, are skipped.
+        """
+        out = {}
+        idx = prices.index
+        for d, p in sorted(preds.items()):
+            loc = idx.get_loc(d)
+            if loc + horizon >= len(idx) or len(p) < 5:
+                continue
+            fwd = prices.iloc[loc + horizon] / prices.iloc[loc] - 1.0
+            s = pd.Series(p)
+            r = fwd.reindex(s.index)
+            ok = s.notna() & r.notna()
+            if ok.sum() >= 5:
+                out[d] = float(stats.spearmanr(s[ok], r[ok]).statistic)
+        return pd.Series(out, name="live_ic", dtype=float)
+
+    @staticmethod
     def ic_significance(ic_series: pd.Series) -> Dict:
         """
         One-sample t-test on the IC time series (H₀: mean IC = 0).
@@ -377,11 +403,12 @@ class StatisticalTests:
             ).dropna()
             ic_res = cls.ic_significance(ic_vals)
             if "error" not in ic_res:
-                print(f"\n[3] ML Signal IC (H₀: IC=0, n={len(ic_vals)} assets)")
+                print(f"\n[3] In-training OOF IC across assets (diagnostic, n={len(ic_vals)} assets)")
                 print(
                     f"    mean_IC={ic_res['mean_IC']:.4f}  ICIR={ic_res['ICIR']:.3f}  "
-                    f"p={ic_res['p_value']:.4f}  "
-                    f"{'✓ Significant' if ic_res['significant_5pct'] else '✗ Not significant'} at 5%"
+                    f"p={ic_res['p_value']:.4f}"
                 )
+                print("    Inflated by pooled time-series ranking and overlapping labels; not evidence of skill.")
+                print("    Use the live cross-sectional IC printed by the pipeline instead.")
 
         print("=" * 55)

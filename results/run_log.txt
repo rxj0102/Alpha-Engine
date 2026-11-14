@@ -1,0 +1,186 @@
+
+======================================================================
+  WALK-FORWARD ALPHA ENGINE
+======================================================================
+Universe: 13 assets | Window: 504d | Freq: ME
+Loaded: 1258 trading days, 13 assets
+Rebalance schedule: 37 periods
+  [1/37] 2021-12-31 (n=504)  regime=low_vol  views=13  top=[XLV:30%, EFA:28%, IEF:22%]
+  [2/37] 2022-01-31 (n=504)  regime=high_vol  views=13  top=[IEF:30%, LQD:30%, TLT:19%]
+  [3/37] 2022-02-28 (n=504)  regime=high_vol  views=13  top=[IEF:30%, LQD:30%, XLV:18%]
+  [4/37] 2022-03-31 (n=504)  regime=high_vol  views=13  top=[IEF:30%, LQD:30%, EFA:16%]
+  [5/37] 2022-05-02 (n=504)  regime=high_vol  views=13  top=[IEF:30%, LQD:30%, EFA:22%]
+  [6/37] 2022-05-31 (n=504)  regime=high_vol  views=13  top=[IEF:30%, LQD:30%, EFA:20%]
+  [7/37] 2022-06-30 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, EFA:21%]
+  [8/37] 2022-08-01 (n=504)  regime=low_vol  views=13  top=[XLI:30%, IEF:30%, QQQ:28%]
+  [9/37] 2022-08-31 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, EFA:17%]
+  [10/37] 2022-09-30 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, XLV:18%]
+  [11/37] 2022-10-31 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, XLV:17%]
+  [12/37] 2022-11-30 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, XLV:17%]
+  [13/37] 2023-01-03 (n=504)  regime=high_vol  views=13  top=[LQD:30%, IEF:30%, XLV:17%]
+  [14/37] 2023-01-31 (n=504)  regime=low_vol  views=13  top=[IWM:30%, EFA:30%, TLT:21%]
+  [15/37] 2023-02-28 (n=504)  regime=low_vol  views=13  top=[XLI:30%, LQD:30%, IEF:27%]
+  [16/37] 2023-03-31 (n=504)  regime=low_vol  views=13  top=[IEF:30%, XLK:30%, TLT:27%]
+  [17/37] 2023-05-01 (n=504)  regime=low_vol  views=13  top=[XLV:30%, EFA:30%, TLT:13%]
+  [18/37] 2023-05-31 (n=504)  regime=low_vol  views=13  top=[XLK:30%, IEF:30%, QQQ:29%]
+  [19/37] 2023-06-30 (n=504)  regime=low_vol  views=13  top=[XLI:30%, LQD:30%, XLV:30%]
+  [20/37] 2023-07-31 (n=504)  regime=low_vol  views=13  top=[XLF:30%, USO:26%, LQD:16%]
+  [21/37] 2023-08-31 (n=504)  regime=low_vol  views=13  top=[XLV:30%, IEF:29%, LQD:24%]
+  [22/37] 2023-10-02 (n=504)  regime=low_vol  views=13  top=[LQD:30%, USO:25%, IEF:21%]
+  [23/37] 2023-10-31 (n=504)  regime=low_vol  views=13  top=[LQD:30%, IEF:30%, XLF:29%]
+  [24/37] 2023-11-30 (n=504)  regime=low_vol  views=13  top=[TLT:30%, XLK:30%, XLF:14%]
+  [25/37] 2024-01-02 (n=504)  regime=low_vol  views=13  top=[IWM:30%, TLT:30%, XLV:22%]
+  [26/37] 2024-01-31 (n=504)  regime=low_vol  views=13  top=[XLV:30%, XLK:28%, LQD:22%]
+  [27/37] 2024-02-29 (n=504)  regime=low_vol  views=13  top=[XLV:30%, XLI:30%, LQD:22%]
+  [28/37] 2024-04-01 (n=504)  regime=low_vol  views=13  top=[XLE:30%, LQD:30%, XLF:17%]
+  [29/37] 2024-04-30 (n=504)  regime=low_vol  views=13  top=[LQD:30%, XLE:30%, IEF:28%]
+  [30/37] 2024-05-31 (n=504)  regime=low_vol  views=13  top=[XLK:30%, IEF:30%, EFA:18%]
+  [31/37] 2024-07-01 (n=504)  regime=low_vol  views=13  top=[XLV:30%, TLT:23%, XLK:23%]
+  [32/37] 2024-07-31 (n=504)  regime=low_vol  views=13  top=[IWM:30%, XLF:30%, IEF:30%]
+  [33/37] 2024-09-03 (n=504)  regime=low_vol  views=13  top=[XLV:30%, EFA:30%, XLF:27%]
+  [34/37] 2024-09-30 (n=504)  regime=low_vol  views=13  top=[EFA:30%, XLI:30%, LQD:30%]
+  [35/37] 2024-10-31 (n=504)  regime=low_vol  views=13  top=[XLF:30%, XLK:30%, SPY:15%]
+  [36/37] 2024-12-02 (n=504)  regime=low_vol  views=13  top=[XLF:30%, IWM:25%, TLT:23%]
+  [37/37] 2024-12-31 (n=504)  regime=low_vol  views=13  top=[XLK:30%, IEF:29%, USO:21%]
+
+Running backtest …
+
+=======================================================
+  PERFORMANCE SUMMARY — ML + BL STRATEGY
+=======================================================
+  Ann. Return                         9.27%
+  Ann. Volatility                     14.76%
+  Sharpe Ratio                        0.357
+  Sortino Ratio                       0.415
+  Max Drawdown                        -30.64%
+  Beta                                0.555
+  Alpha (ann.)                        0.59%
+
+  ABLATION — BL-only (no ML views)
+  Ann. Return                                9.50%  (ML+BL:        9.27%)
+  Ann. Volatility                           14.83%  (ML+BL:       14.76%)
+  Sharpe Ratio                               0.371  (ML+BL:        0.357)
+  Sortino Ratio                              0.430  (ML+BL:        0.415)
+  Max Drawdown                             -30.64%  (ML+BL:      -30.64%)
+  Beta                                       0.569  (ML+BL:        0.555)
+  Alpha (ann.)                               0.61%  (ML+BL:        0.59%)
+
+=======================================================
+  STATISTICAL SIGNIFICANCE REPORT
+=======================================================
+
+[1] Block-Bootstrap Sharpe (H₀: SR=0, B=5000, block=21d)
+    SR=0.357  p=0.0000  ✓ Significant at 5%
+
+[2] Deflated Sharpe Ratio (Harvey & Liu 2015, n_trials=13)
+    DSR=0.460  threshold=0.776  ✗ Fails
+
+[3] In-training OOF IC across assets (diagnostic, n=13 assets)
+    mean_IC=0.5219  ICIR=3.491  p=0.0000
+    Inflated by pooled time-series ranking and overlapping labels; not evidence of skill.
+    Use the live cross-sectional IC printed by the pipeline instead.
+=======================================================
+
+  Live cross-sectional IC (one value per rebalance, non-overlapping):
+    n=35  mean_IC=0.118  ICIR=0.29  t=1.72  p=0.095
+
+  Per-asset in-training OOF IC (pooled time series, overlapping labels; diagnostic only):
+    SPY    mean_IC=0.501  ICIR=3.39  p=0.000  ✓
+    QQQ    mean_IC=0.512  ICIR=3.36  p=0.000  ✓
+    IWM    mean_IC=0.478  ICIR=3.53  p=0.000  ✓
+    EFA    mean_IC=0.545  ICIR=4.25  p=0.000  ✓
+    XLF    mean_IC=0.456  ICIR=3.29  p=0.000  ✓
+    XLE    mean_IC=0.494  ICIR=3.47  p=0.000  ✓
+    XLK    mean_IC=0.504  ICIR=3.66  p=0.000  ✓
+    XLV    mean_IC=0.515  ICIR=2.82  p=0.000  ✓
+    XLI    mean_IC=0.499  ICIR=2.82  p=0.000  ✓
+    TLT    mean_IC=0.499  ICIR=3.66  p=0.000  ✓
+    IEF    mean_IC=0.531  ICIR=3.62  p=0.000  ✓
+    LQD    mean_IC=0.527  ICIR=3.70  p=0.000  ✓
+    USO    mean_IC=0.517  ICIR=4.05  p=0.000  ✓
+{
+  "strategy": {
+    "Ann. Return": "9.27%",
+    "Ann. Volatility": "14.76%",
+    "Sharpe Ratio": "0.357",
+    "Sortino Ratio": "0.415",
+    "Max Drawdown": "-30.64%",
+    "Beta": "0.555",
+    "Alpha (ann.)": "0.59%"
+  },
+  "ablation": {
+    "Ann. Return": "9.50%",
+    "Ann. Volatility": "14.83%",
+    "Sharpe Ratio": "0.371",
+    "Sortino Ratio": "0.430",
+    "Max Drawdown": "-30.64%",
+    "Beta": "0.569",
+    "Alpha (ann.)": "0.61%"
+  },
+  "start": "2020-01-02",
+  "end": "2024-12-31",
+  "assets": [
+    "SPY",
+    "QQQ",
+    "IWM",
+    "EFA",
+    "XLF",
+    "XLE",
+    "XLK",
+    "XLV",
+    "XLI",
+    "TLT",
+    "IEF",
+    "LQD",
+    "USO"
+  ],
+  "spy": {
+    "ann_return": 0.1563923627684968,
+    "ann_vol": 0.2187192957847348,
+    "sharpe": 0.5321540669326726
+  },
+  "live_ic_stats": {
+    "mean_IC": 0.11789638932496077,
+    "ICIR": 0.2903760097665946,
+    "t_stat": 1.717887640877287,
+    "p_value": 0.09491330827677993,
+    "significant_5pct": false
+  },
+  "live_ic": {
+    "2021-12-31": 0.03296703296703297,
+    "2022-01-31": 0.4725274725274725,
+    "2022-02-28": 0.7417582417582418,
+    "2022-03-31": -0.1868131868131868,
+    "2022-05-02": 0.8076923076923077,
+    "2022-05-31": 0.016483516483516484,
+    "2022-06-30": -0.6373626373626374,
+    "2022-08-01": 0.23626373626373626,
+    "2022-08-31": 0.021978021978021976,
+    "2022-09-30": -0.3736263736263736,
+    "2022-10-31": -0.2967032967032967,
+    "2022-11-30": 0.4340659340659341,
+    "2023-01-03": -0.6263736263736264,
+    "2023-01-31": 0.5384615384615384,
+    "2023-02-28": 0.0879120879120879,
+    "2023-03-31": 0.45604395604395603,
+    "2023-05-01": -0.32417582417582413,
+    "2023-05-31": 0.2912087912087912,
+    "2023-06-30": 0.24175824175824176,
+    "2023-07-31": -0.0879120879120879,
+    "2023-08-31": 0.5164835164835164,
+    "2023-10-02": 0.054945054945054944,
+    "2023-10-31": 0.4010989010989011,
+    "2023-11-30": 0.15384615384615383,
+    "2024-01-02": -0.47802197802197804,
+    "2024-01-31": 0.6373626373626374,
+    "2024-02-29": 0.6703296703296703,
+    "2024-04-01": 0.32967032967032966,
+    "2024-04-30": -0.21428571428571427,
+    "2024-05-31": 0.24725274725274726,
+    "2024-07-01": -0.7527472527472527,
+    "2024-07-31": 0.08241758241758242,
+    "2024-09-03": 0.07692307692307691,
+    "2024-09-30": 0.04395604395604395,
+    "2024-10-31": 0.510989010989011
+  }
+}

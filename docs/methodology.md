@@ -188,7 +188,7 @@ ICIR = $\bar{IC} / \sigma_{IC}$ is reported alongside the p-value. An ICIR > 0.5
 
 ## 8. Limitations and Failure Modes
 
-**Data source risk**: yfinance is not a professional data vendor. Adjusted close prices may differ across providers due to different dividend and split adjustment methodologies. Corporate actions (mergers, re-listings) can cause large gaps. For production use, a Bloomberg or Refinitiv feed is necessary.
+**Data source risk**: the backtest uses open data stand ins (FRED, Ken French Data Library), not the ETFs themselves. Industry and size portfolios, a price index for QQQ, and bond returns priced from constant maturity yields track the ETFs closely but not exactly (no fund fees, tracking error or futures roll). For production use, actual ETF total return series from a professional vendor are necessary.
 
 **Single-country bias**: The universe is US-listed ETFs (including international equity ETFs, but traded in USD). This introduces implicit USD currency exposure and US market hours constraints. An extension to non-USD instruments would require FX hedging assumptions.
 

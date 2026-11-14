@@ -12,15 +12,17 @@ from typing import List
 SEED: int = 42
 
 # ── Asset universe ─────────────────────────────────────────────────────────────
+# Tickers are labels for open data stand ins (see src/opendata.py).
+# EEM and GLD were dropped: no free daily open source exists for them.
 UNIVERSE: List[str] = [
     # Broad equities
-    "SPY", "QQQ", "IWM", "EFA", "EEM",
-    # Sector ETFs
+    "SPY", "QQQ", "IWM", "EFA",
+    # Sector (Ken French 12 industry portfolios)
     "XLF", "XLE", "XLK", "XLV", "XLI",
-    # Fixed income
+    # Fixed income (FRED constant maturity yields to par bond returns)
     "TLT", "IEF", "LQD",
     # Commodities
-    "GLD", "USO",
+    "USO",
 ]
 
 # ── Transaction cost model ─────────────────────────────────────────────────────

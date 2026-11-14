@@ -239,3 +239,52 @@ def proxy_prices(tickers: list[str], start: str | None = None, end: str | None =
     p = 100.0 * (1.0 + r.fillna(0.0)).cumprod()
     started = r.notna().cummax()
     return p.where(started)
+
+
+# ---------------------------------------------------------------------------
+# Data snapshot manifest (reproducibility)
+# ---------------------------------------------------------------------------
+def write_manifest(path: str | os.PathLike) -> dict:
+    """Record every cached input file with its SHA-256, size, rows and date range.
+
+    Ken French and FRED revise history from time to time. Committing this
+    manifest next to the results shows exactly which data they came from, and
+    verify_manifest() tells you whether a fresh download still matches.
+    """
+    import datetime as _dt
+    import hashlib
+    import json
+
+    files = {}
+    for p in sorted(CACHE.glob("*.csv")):
+        raw = p.read_bytes()
+        info = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+        try:
+            df = pd.read_csv(p, index_col=0)
+            info["rows"] = int(len(df))
+            info["first"] = str(df.index[0])
+            info["last"] = str(df.index[-1])
+        except Exception:  # pragma: no cover - unusual file
+            pass
+        files[p.name] = info
+    out = {"generated_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "sources": {"fred": FRED_URL, "french": FRENCH_URL, "github": GITHUB_DATASETS},
+           "files": files}
+    Path(path).write_text(json.dumps(out, indent=2) + "\n")
+    return out
+
+
+def verify_manifest(path: str | os.PathLike) -> dict:
+    """Compare cached files with a manifest. Returns {file: 'ok' | 'changed' | 'missing'}."""
+    import hashlib
+    import json
+
+    m = json.loads(Path(path).read_text())
+    status = {}
+    for name, info in m["files"].items():
+        p = CACHE / name
+        if not p.exists():
+            status[name] = "missing"
+        else:
+            status[name] = "ok" if hashlib.sha256(p.read_bytes()).hexdigest() == info["sha256"] else "changed"
+    return status

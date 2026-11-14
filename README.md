@@ -291,3 +291,10 @@ jupyter notebook notebooks/alpha_engine.ipynb
 - Ledoit, O. & Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis*, 88(2), 365-411.
 - Grinold, R. (1989). The fundamental law of active management. *Journal of Portfolio Management*, 15(3), 30-37.
 - Artzner, P., Delbaen, F., Eber, J.-M. & Heath, D. (1999). Coherent measures of risk. *Mathematical Finance*, 9(3), 203-228.
+## Data snapshot
+
+`results/open_data_manifest.json` records every open data file behind the results above (SHA-256, rows, first and last date). Ken French and FRED occasionally revise history; after a fresh download, check whether the inputs still match with:
+
+```bash
+python -c "from src.opendata import verify_manifest; print(verify_manifest('results/open_data_manifest.json'))"
+```

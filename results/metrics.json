@@ -1,11 +1,7 @@
 {
   "config": {
-    "start": "2020-01-01",
-    "end": "2024-12-31",
-    "train_window": 504,
-    "horizon": 21,
-    "rebalance": "ME",
-    "risk_free": 0.04,
+    "data_start": "1990-07-02",
+    "data_end": "2026-09-30",
     "universe": [
       "SPY",
       "QQQ",
@@ -20,74 +16,388 @@
       "IEF",
       "LQD",
       "USO"
-    ]
+    ],
+    "cov_window": 504,
+    "vol_window": 63,
+    "min_train_months": 60,
+    "risk_aversion": 2.5,
+    "max_weight": 0.3,
+    "view_confidence": 0.65,
+    "assumed_ic": 0.05,
+    "n_bootstrap": 2000,
+    "block": 21
   },
   "sample": {
-    "first_day": "2022-01-03",
-    "last_day": "2024-12-31",
-    "n_days": 753,
-    "eval_start": "2021-12-31"
+    "eval_start": "1996-09-30",
+    "first_day": "1996-10-01",
+    "last_day": "2026-09-30",
+    "n_days": 7547,
+    "n_rebalances": 361,
+    "years": 29.9484,
+    "panel_rows": 5460,
+    "training_rows_first": 754,
+    "rows_before_eval": 767
   },
-  "comparison": {
-    "ML + BL": {
-      "ann_return": 0.0013820591,
-      "ann_vol": 0.10374997,
-      "sharpe": -0.37222121,
-      "sortino": -0.58407373,
-      "max_drawdown": -0.20203033,
-      "beta": 0.42595662,
-      "alpha_ann": -0.039672693,
-      "n_days": 753
+  "summary": {
+    "1/N": {
+      "ann_return": 0.104553,
+      "ann_excess": 0.0819138,
+      "ann_vol": 0.137206,
+      "sharpe": 0.596948,
+      "max_drawdown": -0.43704,
+      "n_days": 7547,
+      "turnover_ann": 0.188524,
+      "sharpe_lo": 0.236806,
+      "sharpe_hi": 0.994443,
+      "avg_equity": 0.692308,
+      "avg_bonds": 0.230769,
+      "avg_oil": 0.0769231
     },
-    "1/N equal weight": {
-      "ann_return": 0.048836874,
-      "ann_vol": 0.13057238,
-      "sharpe": 0.067677973,
-      "sortino": 0.10041166,
-      "max_drawdown": -0.18574856,
-      "beta": 0.65606314,
-      "alpha_ann": -0.014396113,
-      "n_days": 753
+    "Inverse volatility": {
+      "ann_return": 0.0888337,
+      "ann_excess": 0.0661948,
+      "ann_vol": 0.0921929,
+      "sharpe": 0.717872,
+      "max_drawdown": -0.276702,
+      "n_days": 7547,
+      "turnover_ann": 0.448179,
+      "sharpe_lo": 0.321029,
+      "sharpe_hi": 1.13472,
+      "avg_equity": 0.542649,
+      "avg_bonds": 0.42593,
+      "avg_oil": 0.0314209
     },
-    "BL only": {
-      "ann_return": 0.02560094,
-      "ann_vol": 0.11094511,
-      "sharpe": -0.12978545,
-      "sortino": -0.2072984,
-      "max_drawdown": -0.20203033,
-      "beta": 0.47109261,
-      "alpha_ann": -0.01980413,
-      "n_days": 753
+    "Momentum": {
+      "ann_return": 0.106102,
+      "ann_excess": 0.0834628,
+      "ann_vol": 0.153161,
+      "sharpe": 0.544905,
+      "max_drawdown": -0.416304,
+      "n_days": 7547,
+      "turnover_ann": 2.64262,
+      "sharpe_lo": 0.205725,
+      "sharpe_hi": 0.923454,
+      "avg_equity": 0.751579,
+      "avg_bonds": 0.200015,
+      "avg_oil": 0.048406
     },
-    "US market (SPY stand-in)": {
-      "ann_return": 0.096382472,
-      "ann_vol": 0.18295768,
-      "sharpe": 0.30817221,
-      "sortino": 0.43925323,
-      "max_drawdown": -0.25449072,
-      "beta": 1.0,
-      "alpha_ann": 1.2490009e-16,
-      "n_days": 753
+    "Carry (bonds)": {
+      "ann_return": 0.1004,
+      "ann_excess": 0.077761,
+      "ann_vol": 0.142835,
+      "sharpe": 0.544352,
+      "max_drawdown": -0.442099,
+      "n_days": 7547,
+      "turnover_ann": 1.0046,
+      "sharpe_lo": 0.162529,
+      "sharpe_hi": 0.963624,
+      "avg_equity": 0.705122,
+      "avg_bonds": 0.217903,
+      "avg_oil": 0.0769746
+    },
+    "Momentum + carry": {
+      "ann_return": 0.109366,
+      "ann_excess": 0.0867271,
+      "ann_vol": 0.157141,
+      "sharpe": 0.551875,
+      "max_drawdown": -0.432478,
+      "n_days": 7547,
+      "turnover_ann": 2.53988,
+      "sharpe_lo": 0.208762,
+      "sharpe_hi": 0.9305,
+      "avg_equity": 0.779677,
+      "avg_bonds": 0.170896,
+      "avg_oil": 0.0494271
+    },
+    "ML": {
+      "ann_return": 0.0917005,
+      "ann_excess": 0.0690615,
+      "ann_vol": 0.123294,
+      "sharpe": 0.560062,
+      "max_drawdown": -0.355992,
+      "n_days": 7547,
+      "turnover_ann": 6.68948,
+      "sharpe_lo": 0.198851,
+      "sharpe_hi": 0.947746,
+      "avg_equity": 0.715509,
+      "avg_bonds": 0.267147,
+      "avg_oil": 0.0173436
+    },
+    "US market": {
+      "ann_return": 0.117833,
+      "ann_excess": 0.0951937,
+      "ann_vol": 0.19288,
+      "sharpe": 0.493513,
+      "max_drawdown": -0.545655,
+      "n_days": 7547,
+      "sharpe_lo": 0.179109,
+      "sharpe_hi": 0.855884
     }
   },
-  "tests": {
-    "bootstrap_sharpe": -0.37246862,
-    "bootstrap_p": 0.7442,
-    "dsr": -0.37779735,
-    "dsr_threshold": 0.98589525,
-    "dsr_n_trials": 13
+  "periods": {
+    "1996-2006": {
+      "1/N": 0.641628,
+      "Inverse volatility": 0.861393,
+      "Momentum": 0.678013,
+      "Carry (bonds)": 0.608604,
+      "Momentum + carry": 0.672699,
+      "ML": 0.691878,
+      "US market": 0.373918
+    },
+    "2007-2009": {
+      "1/N": 0.0304439,
+      "Inverse volatility": 0.221124,
+      "Momentum": -0.139945,
+      "Carry (bonds)": 0.0932941,
+      "Momentum + carry": -0.116895,
+      "ML": 0.139732,
+      "US market": -0.0921603
+    },
+    "2010-2019": {
+      "1/N": 0.8746,
+      "Inverse volatility": 1.17189,
+      "Momentum": 0.743652,
+      "Carry (bonds)": 0.900098,
+      "Momentum + carry": 0.78109,
+      "ML": 0.789407,
+      "US market": 0.88236
+    },
+    "2020-2026": {
+      "1/N": 0.630681,
+      "Inverse volatility": 0.37376,
+      "Momentum": 0.505374,
+      "Carry (bonds)": 0.413125,
+      "Momentum + carry": 0.50209,
+      "ML": 0.423217,
+      "US market": 0.645682
+    }
   },
-  "ic_in_training": {
-    "n_asset_rebalances": 481,
-    "mean": 0.0018414018,
-    "median": -0.028571429,
-    "share_positive": 0.4968815
+  "sharpe_diffs": [
+    {
+      "a": "Momentum",
+      "b": "1/N",
+      "diff": -0.0520426,
+      "lo": -0.238208,
+      "hi": 0.133535,
+      "p_value": 0.594
+    },
+    {
+      "a": "Carry (bonds)",
+      "b": "1/N",
+      "diff": -0.0525953,
+      "lo": -0.161346,
+      "hi": 0.0631221,
+      "p_value": 0.3985
+    },
+    {
+      "a": "Momentum + carry",
+      "b": "1/N",
+      "diff": -0.0450726,
+      "lo": -0.223048,
+      "hi": 0.133069,
+      "p_value": 0.6235
+    },
+    {
+      "a": "ML",
+      "b": "1/N",
+      "diff": -0.036886,
+      "lo": -0.187609,
+      "hi": 0.122863,
+      "p_value": 0.6295
+    },
+    {
+      "a": "ML",
+      "b": "Momentum",
+      "diff": 0.0151566,
+      "lo": -0.180552,
+      "hi": 0.216611,
+      "p_value": 0.8825
+    },
+    {
+      "a": "ML",
+      "b": "Momentum + carry",
+      "diff": 0.00818668,
+      "lo": -0.176292,
+      "hi": 0.202049,
+      "p_value": 0.926
+    }
+  ],
+  "active": {
+    "Momentum": {
+      "active_return_ann": 0.000876197,
+      "tracking_error_ann": 0.0700997,
+      "info_ratio": 0.0124993,
+      "t_stat": 0.0684615,
+      "psr": 0.527247,
+      "dsr": 0.254836
+    },
+    "Carry (bonds)": {
+      "active_return_ann": -0.00375216,
+      "tracking_error_ann": 0.0343884,
+      "info_ratio": -0.109111,
+      "t_stat": -0.597626,
+      "psr": 0.273928,
+      "dsr": 0.0911149
+    },
+    "Momentum + carry": {
+      "active_return_ann": 0.00413036,
+      "tracking_error_ann": 0.067858,
+      "info_ratio": 0.0608676,
+      "t_stat": 0.333386,
+      "psr": 0.630087,
+      "dsr": 0.346816
+    },
+    "ML": {
+      "active_return_ann": -0.0123029,
+      "tracking_error_ann": 0.0557799,
+      "info_ratio": -0.220562,
+      "t_stat": -1.20807,
+      "psr": 0.116687,
+      "dsr": 0.0280212
+    }
   },
-  "ic_live": {
-    "n_rebalances": 35,
-    "mean": 0.052904239,
-    "icir": 0.19723469,
-    "t_stat": 1.1668561,
-    "p_value": 0.25138755
+  "active_meta": {
+    "n_trials": 4,
+    "n_months": 360,
+    "sr0_annual": 0.133071
+  },
+  "ic": {
+    "Momentum": {
+      "n": 360,
+      "mean": 0.0365995,
+      "std": 0.43471,
+      "t_stat": 1.50675,
+      "p_value": 0.131875,
+      "share_positive": 0.541667,
+      "detectable_ic": 0.0458225
+    },
+    "ML ridge": {
+      "n": 360,
+      "mean": 0.0574634,
+      "std": 0.394232,
+      "t_stat": 2.70511,
+      "p_value": 0.00682828,
+      "share_positive": 0.544444,
+      "detectable_ic": 0.0415557
+    },
+    "ML gradient boosting": {
+      "n": 360,
+      "mean": 0.0453907,
+      "std": 0.393531,
+      "t_stat": 2.11811,
+      "p_value": 0.034166,
+      "share_positive": 0.525,
+      "detectable_ic": 0.0414819
+    },
+    "ML": {
+      "n": 360,
+      "mean": 0.0517094,
+      "std": 0.398881,
+      "t_stat": 2.40036,
+      "p_value": 0.0163791,
+      "share_positive": 0.538889,
+      "detectable_ic": 0.0420458
+    },
+    "Low volatility": {
+      "n": 360,
+      "mean": 0.0235653,
+      "std": 0.434162,
+      "t_stat": 0.984813,
+      "p_value": 0.324716,
+      "share_positive": 0.527778,
+      "detectable_ic": 0.0457647
+    },
+    "Momentum, equities only": {
+      "n": 360,
+      "mean": 0.0244907,
+      "std": 0.446786,
+      "t_stat": 1.04103,
+      "p_value": 0.297864,
+      "share_positive": 0.511111,
+      "detectable_ic": 0.0470954
+    },
+    "ML, equities only": {
+      "n": 360,
+      "mean": 0.0430093,
+      "std": 0.398909,
+      "t_stat": 2.01884,
+      "p_value": 0.0435041,
+      "share_positive": 0.522222,
+      "detectable_ic": 0.0420487
+    },
+    "ML minus Momentum": {
+      "n": 360,
+      "mean": 0.0151099,
+      "std": 0.504684,
+      "t_stat": 0.523199,
+      "p_value": 0.600836,
+      "share_positive": 0.483333,
+      "detectable_ic": 0.0531983
+    },
+    "ML minus Low volatility": {
+      "n": 360,
+      "mean": 0.0281441,
+      "std": 0.371826,
+      "t_stat": 1.49069,
+      "p_value": 0.136044,
+      "share_positive": 0.513889,
+      "detectable_ic": 0.0391939
+    }
+  },
+  "ic_periods": {
+    "1996-2006": {
+      "Momentum": 0.0610156,
+      "ML": 0.102402
+    },
+    "2007-2009": {
+      "Momentum": 0.0419719,
+      "ML": 0.126374
+    },
+    "2010-2019": {
+      "Momentum": 0.0160714,
+      "ML": 0.0157051
+    },
+    "2020-2026": {
+      "Momentum": 0.0271291,
+      "ML": -0.00645604
+    }
+  },
+  "ic_corr_ml_momentum": 0.269247,
+  "score_corr_ml_momentum": 0.290143,
+  "carry_timing": {
+    "n_obs": 1080,
+    "n_months": 360,
+    "slope": 0.0831146,
+    "t_stat": 1.75772,
+    "p_value": 0.0787958,
+    "corr": 0.0866778
+  },
+  "robustness": {
+    "no costs": {
+      "1/N": 0.600143,
+      "Momentum": 0.583308,
+      "Carry (bonds)": 0.559448,
+      "Momentum + carry": 0.588093,
+      "ML": 0.678603
+    },
+    "double costs": {
+      "1/N": 0.593752,
+      "Momentum": 0.506426,
+      "Carry (bonds)": 0.529237,
+      "Momentum + carry": 0.515591,
+      "ML": 0.44113
+    },
+    "assumed IC 0.025": {
+      "Momentum": 0.567254,
+      "Carry (bonds)": 0.571845,
+      "Momentum + carry": 0.572894,
+      "ML": 0.573998
+    },
+    "assumed IC 0.10": {
+      "Momentum": 0.509759,
+      "Carry (bonds)": 0.53022,
+      "Momentum + carry": 0.521363,
+      "ML": 0.55184
+    }
   }
 }

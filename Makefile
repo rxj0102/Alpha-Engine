@@ -1,6 +1,6 @@
 .PHONY: reproduce render check test
 
-reproduce:  ## rerun the walk-forward backtest (downloads prices) and refresh README
+reproduce:  ## rerun the experiment on the frozen data and refresh README
 	uv run python scripts/reproduce.py
 	uv run python scripts/render_readme.py
 

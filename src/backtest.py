@@ -1,500 +1,184 @@
+"""Backtest and the statistics used to judge it.
+
+backtest            daily simulation with monthly rebalancing and trading costs
+summarize           return, volatility, Sharpe, drawdown from daily excess returns
+sharpe_ci           block bootstrap confidence interval for one Sharpe ratio
+sharpe_diff_test    paired block bootstrap for the difference of two Sharpe ratios
+deflated_sharpe     Deflated Sharpe Ratio of Bailey and Lopez de Prado (2014)
+ic_stats            mean rank IC with a Newey-West t-statistic
 """
-backtest.py — Event-driven backtester and statistical significance tests.
-
-PortfolioBacktester
---------------------
-Simulates a rebalancing strategy with realistic transaction costs.
-Cost model: half bid-ask spread (per-ticker) + commission.
-
-[BT-1] Rebalance dates are derived from the actual price index via resample,
-       not from a synthetic pd.date_range — this aligns to real trading days
-       and handles holiday-adjusted calendars correctly.
-
-StatisticalTests
-----------------
-Three validation tests to guard against data-mining bias:
-
-1. Block-bootstrap Sharpe  — p-value under H₀: SR = 0; preserves autocorrelation
-2. Deflated Sharpe Ratio   — penalises multiple testing (Harvey & Liu 2015)
-3. IC t-test               — confirms ML signal has non-zero predictive content
-"""
-
-import logging
 from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 
-from src.config import BID_ASK_SPREAD, COMMISSION, SEED
+from src.config import COMMISSION, DEFAULT_HALF_SPREAD, HALF_SPREAD, SEED
 
-log = logging.getLogger(__name__)
+EULER = 0.5772156649015329
 
 
-class PortfolioBacktester:
+def cost_vector(tickers, cost_mult: float = 1.0) -> np.ndarray:
+    """One-way cost per unit traded for each ticker."""
+    return cost_mult * np.array([HALF_SPREAD.get(t, DEFAULT_HALF_SPREAD) + COMMISSION for t in tickers])
+
+
+def backtest(prices: pd.DataFrame, targets: pd.DataFrame, cost_mult: float = 1.0) -> Dict:
+    """Simulate a fully invested portfolio that trades to targets at the close of each target date.
+
+    prices   daily total return indices without gaps
+    targets  weights per rebalance date (rows sum to 1); dates must be in prices.index
+
+    Between rebalances the weights drift with returns. On a rebalance date the
+    day's return is earned on the old weights, then the portfolio trades and
+    pays cost * |trade| out of its value. The first target date only sets up
+    the portfolio, so returns start on the following day.
+
+    Returns daily net returns, one-way turnover per rebalance and total cost paid.
     """
-    Event-driven backtester with per-ticker transaction cost model.
-
-    Parameters
-    ----------
-    initial_capital : float
-        Starting portfolio value in dollars.
-    risk_free_rate : float
-        Annualised risk-free rate for Sharpe / Sortino calculation.
-    """
-
-    def __init__(
-        self,
-        initial_capital: float = 1_000_000,
-        risk_free_rate: float = 0.04,
-    ) -> None:
-        self.initial_capital = initial_capital
-        self.rf_daily = risk_free_rate / 252
-        self.portfolio_history = pd.DataFrame()
-
-    # ── Internal helpers ───────────────────────────────────────────────────
-
-    def _tcost(self, ticker: str, notional: float) -> float:
-        """Round-trip transaction cost: half spread + commission.
-
-        BID_ASK_SPREAD values are already *half* spreads (one-way cost), so we
-        add them directly to commission rather than halving again.
-        """
-        spread = BID_ASK_SPREAD.get(ticker, 8e-4)
-        return notional * (spread + COMMISSION)
-
-    @staticmethod
-    def _rebalance_dates(index: pd.DatetimeIndex, freq: str = "ME") -> set:
-        """
-        [BT-1] Derive rebalance dates from the actual price index.
-
-        Resampling the index itself ensures month-end dates land on
-        the last real trading day, not a weekend or holiday.
-        """
-        s = pd.Series(index, index=index)
-        try:
-            return set(s.resample(freq).last().dropna())
-        except Exception:
-            return set(s.resample("ME").last().dropna())
-
-    # ── Simulation ─────────────────────────────────────────────────────────
-
-    def run(
-        self,
-        prices: pd.DataFrame,
-        weights_history: pd.DataFrame,
-        freq: str = "ME",
-    ) -> pd.DataFrame:
-        """
-        Simulate the portfolio day by day.
-
-        On non-rebalance days holdings drift with price changes.
-        On rebalance days, holdings are adjusted to target weights
-        after deducting transaction costs from cash.
-
-        Parameters
-        ----------
-        prices : pd.DataFrame
-            Adjusted daily close prices.
-        weights_history : pd.DataFrame
-            Date-indexed target weight snapshots (forward-filled externally).
-        freq : str
-            Resample frequency for rebalance schedule (default 'ME').
-
-        Returns
-        -------
-        pd.DataFrame
-            Daily portfolio value and cash, indexed by date.
-        """
-        holdings = pd.Series(0.0, index=prices.columns)
-        cash = float(self.initial_capital)
-        results = []
-
-        common = prices.index.intersection(weights_history.index)
-        reb_dates = self._rebalance_dates(common, freq)
-        log.info(
-            "Backtest: %s → %s | %d rebalances",
-            common[0].date(), common[-1].date(), len(reb_dates),
-        )
-
-        for date in common:
-            px = prices.loc[date]
-            pv = float((holdings * px).sum()) + cash
-
-            if date in reb_dates:
-                tgt = weights_history.loc[date].reindex(prices.columns).fillna(0)
-                tgt /= tgt.sum()
-                tgt_holdings = tgt * pv / px.replace(0, np.nan)
-                delta = (tgt_holdings - holdings).dropna()
-                tcosts = sum(
-                    self._tcost(t, abs(d) * px.get(t, 0)) for t, d in delta.items()
-                )
-                cash = pv - float((tgt_holdings * px).sum()) - tcosts
-                holdings = tgt_holdings.fillna(0)
-
-            results.append({"date": date, "portfolio_value": pv, "cash": cash})
-
-        self.portfolio_history = pd.DataFrame(results).set_index("date")
-        return self.portfolio_history
-
-    # ── Performance metrics ────────────────────────────────────────────────
-
-    def metrics(
-        self,
-        benchmark: Optional[pd.Series] = None,
-        start: Optional[pd.Timestamp] = None,
-        end: Optional[pd.Timestamp] = None,
-    ) -> Dict:
-        """
-        Compute standard risk-adjusted performance statistics.
-
-        Returns
-        -------
-        dict
-            Ann. Return, Ann. Volatility, Sharpe, Sortino, Max Drawdown,
-            and optionally Beta / Alpha vs. benchmark.
-        """
-        ph = self.portfolio_history
-        ret = ph["portfolio_value"].pct_change().dropna()
-        if start is not None:
-            ret = ret[ret.index > pd.Timestamp(start)]
-        if end is not None:
-            ret = ret[ret.index <= pd.Timestamp(end)]
-        excess = ret - self.rf_daily
-        ann_ret = float(ret.mean() * 252)
-        ann_vol = float(ret.std() * np.sqrt(252))
-        sharpe = float(excess.mean() * 252 / (excess.std() * np.sqrt(252)))
-
-        cum = (1 + ret).cumprod()
-        mdd = float(((cum - cum.expanding().max()) / cum.expanding().max()).min())
-
-        downside = excess[excess < 0]
-        sortino = (
-            float(excess.mean() * 252 / (downside.std() * np.sqrt(252)))
-            if len(downside) > 1 else np.nan
-        )
-
-        result = {
-            "Ann. Return": f"{ann_ret:.2%}",
-            "Ann. Volatility": f"{ann_vol:.2%}",
-            "Sharpe Ratio": f"{sharpe:.3f}",
-            "Sortino Ratio": f"{sortino:.3f}",
-            "Max Drawdown": f"{mdd:.2%}",
-        }
-
-        if benchmark is not None:
-            b = benchmark.reindex(ret.index).dropna()
-            ret_b = ret.reindex(b.index).dropna()
-            b = b.reindex(ret_b.index)
-            beta = float(np.cov(ret_b.values, b.values)[0, 1] / b.var())
-            alpha = float(ann_ret - beta * b.mean() * 252)
-            result.update({"Beta": f"{beta:.3f}", "Alpha (ann.)": f"{alpha:.2%}"})
-
-        return result
+    targets = targets.reindex(columns=prices.columns).fillna(0.0)
+    start = targets.index[0]
+    px = prices.loc[start:]
+    rets = px.pct_change().fillna(0.0).values
+    cost = cost_vector(prices.columns, cost_mult)
+    tgt = {d: targets.loc[d].values for d in targets.index}
+    w = np.zeros(px.shape[1])
+    out = np.zeros(len(px))
+    turnover = {}
+    for i, d in enumerate(px.index):
+        gross = 1.0 + float(w @ rets[i])
+        if gross > 0 and w.sum() > 0:
+            w = w * (1.0 + rets[i]) / gross
+        day = gross - 1.0
+        if d in tgt:
+            trade = np.abs(tgt[d] - w)
+            # setting up the initial portfolio is not charged, for any strategy
+            paid = float(trade @ cost) if i > 0 else 0.0
+            turnover[d] = 0.5 * float(trade.sum()) if i > 0 else np.nan
+            day = (1.0 + day) * (1.0 - paid) - 1.0
+            w = tgt[d].copy()
+        out[i] = day
+    r = pd.Series(out, index=px.index).iloc[1:]
+    to = pd.Series(turnover).dropna()
+    return {"returns": r, "turnover": to}
 
 
-def summarize_returns(
-    ret: pd.Series, rf: float, benchmark: Optional[pd.Series] = None
-) -> Dict[str, float]:
-    """Numeric performance summary of a daily return series.
+def sharpe(excess: np.ndarray) -> float:
+    sd = excess.std(ddof=1)
+    return float(np.sqrt(252) * excess.mean() / sd) if sd > 0 else np.nan
 
-    Same definitions as PortfolioBacktester.metrics (arithmetic annual
-    return, Sharpe and Sortino on excess over ``rf``), returned as floats
-    so several strategies can be tabulated side by side.
-    """
+
+def summarize(ret: pd.Series, rf: pd.Series, turnover: Optional[pd.Series] = None) -> Dict[str, float]:
+    """Annualised statistics of a daily return series, in excess of the daily bill rate."""
     ret = ret.dropna()
-    rf_d = rf / 252
-    ex = ret - rf_d
+    ex = ret - rf.reindex(ret.index).fillna(0.0)
     cum = (1 + ret).cumprod()
-    down = ex[ex < 0]
     out = {
         "ann_return": float(ret.mean() * 252),
+        "ann_excess": float(ex.mean() * 252),
         "ann_vol": float(ret.std() * np.sqrt(252)),
-        "sharpe": float(ex.mean() / ex.std() * np.sqrt(252)) if ex.std() > 0 else np.nan,
-        "sortino": float(ex.mean() * 252 / (down.std() * np.sqrt(252))) if len(down) > 1 else np.nan,
+        "sharpe": sharpe(ex.values),
         "max_drawdown": float((cum / cum.cummax() - 1).min()),
         "n_days": int(len(ret)),
     }
-    if benchmark is not None:
-        b = benchmark.reindex(ret.index).dropna()
-        r = ret.reindex(b.index)
-        if len(b) > 2 and b.var() > 0:
-            beta = float(np.cov(r.values, b.values)[0, 1] / b.var())
-            out["beta"] = beta
-            out["alpha_ann"] = float(r.mean() * 252 - beta * b.mean() * 252)
+    if turnover is not None and len(turnover):
+        out["turnover_ann"] = float(turnover.mean() * 12)
     return out
 
 
-def comparison_table(
-    returns_by_name: Dict[str, pd.Series],
-    rf: float,
-    benchmark: Optional[pd.Series],
-    start: pd.Timestamp,
-    end: pd.Timestamp,
-) -> pd.DataFrame:
-    """Side-by-side metrics on the full window and on each half of it.
+def _block_index(n: int, block: int, n_boot: int, seed: int) -> np.ndarray:
+    """Circular block bootstrap index matrix of shape (n_boot, n)."""
+    rng = np.random.default_rng(seed)
+    k = n // block + 1
+    starts = rng.integers(0, n, size=(n_boot, k))
+    idx = (starts[:, :, None] + np.arange(block)[None, None, :]) % n
+    return idx.reshape(n_boot, -1)[:, :n]
 
-    Only returns strictly after ``start`` (the first rebalance date) are
-    used, so no strategy is credited with a warm-up period in which its
-    weights were not yet set by its own model.
+
+def _sharpe_rows(x: np.ndarray) -> np.ndarray:
+    return np.sqrt(252) * x.mean(axis=1) / x.std(axis=1, ddof=1)
+
+
+def sharpe_ci(excess: pd.Series, n_boot: int = 2000, block: int = 21, seed: int = SEED) -> Dict:
+    """Sharpe ratio with a 95% circular block bootstrap interval."""
+    x = excess.dropna().values
+    boot = _sharpe_rows(x[_block_index(len(x), block, n_boot, seed)])
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return {"sharpe": sharpe(x), "lo": float(lo), "hi": float(hi)}
+
+
+def sharpe_diff_test(a: pd.Series, b: pd.Series, n_boot: int = 2000, block: int = 21,
+                     seed: int = SEED) -> Dict:
+    """Difference of Sharpe ratios (a minus b) with a paired block bootstrap.
+
+    Both series are resampled with the same blocks, which keeps their
+    correlation. The p-value is two-sided for H0: equal Sharpe ratios, from the
+    bootstrap distribution centred on the observed difference.
     """
-    start, end = pd.Timestamp(start), pd.Timestamp(end)
-    mid = start + (end - start) / 2
-    windows = {"full": (start, end), "first_half": (start, mid), "second_half": (mid, end)}
-    rows = []
-    for name, ret in returns_by_name.items():
-        for wname, (a, b) in windows.items():
-            r = ret[(ret.index > a) & (ret.index <= b)]
-            row = {"strategy": name, "window": wname,
-                   "window_start": str(r.index.min().date()) if len(r) else "",
-                   "window_end": str(r.index.max().date()) if len(r) else ""}
-            row.update(summarize_returns(r, rf, benchmark))
-            rows.append(row)
-    return pd.DataFrame(rows)
+    df = pd.concat([a, b], axis=1).dropna()
+    x, y = df.iloc[:, 0].values, df.iloc[:, 1].values
+    obs = sharpe(x) - sharpe(y)
+    idx = _block_index(len(df), block, n_boot, seed)
+    d = _sharpe_rows(x[idx]) - _sharpe_rows(y[idx])
+    lo, hi = np.percentile(d, [2.5, 97.5])
+    p = float(np.mean(np.abs(d - obs) >= abs(obs)))
+    return {"diff": float(obs), "lo": float(lo), "hi": float(hi), "p_value": p}
 
 
-# ── Statistical validation ─────────────────────────────────────────────────────
+def deflated_sharpe(sr: float, n_obs: int, skew: float, kurt: float,
+                    n_trials: int = 1, trials_sr_std: float = 0.0) -> Dict:
+    """Deflated Sharpe Ratio (Bailey and Lopez de Prado 2014).
 
+    All inputs are per period, not annualised: sr is mean / standard deviation
+    of the n_obs returns, kurt is the raw kurtosis (3 for a normal).
 
-class StatisticalTests:
+    The benchmark SR0 is the Sharpe ratio expected from the best of n_trials
+    strategies that all have zero true Sharpe, given the standard deviation of
+    Sharpe ratios across the trials. The result is the probability that the true
+    Sharpe ratio exceeds SR0. With n_trials = 1 it is the Probabilistic Sharpe
+    Ratio against zero.
     """
-    Significance tests to guard against false discoveries in backtesting.
+    if n_trials > 1:
+        sr0 = trials_sr_std * ((1 - EULER) * stats.norm.ppf(1 - 1 / n_trials)
+                               + EULER * stats.norm.ppf(1 - 1 / (n_trials * np.e)))
+    else:
+        sr0 = 0.0
+    denom = np.sqrt(max(1 - skew * sr + (kurt - 1) / 4 * sr ** 2, 1e-12))
+    z = (sr - sr0) * np.sqrt(n_obs - 1) / denom
+    return {"dsr": float(stats.norm.cdf(z)), "sr0": float(sr0)}
 
-    Methods
-    -------
-    block_bootstrap_sharpe  — circular block bootstrap p-value for SR > 0
-    deflated_sharpe_ratio   — multiple-testing penalty (Harvey & Liu 2015)
-    ic_significance         — one-sample t-test on IC time series
-    report                  — print a formatted summary of all three tests
-    """
 
-    @staticmethod
-    def block_bootstrap_sharpe(
-        returns: pd.Series,
-        n_bootstrap: int = 5000,
-        block_size: int = 21,
-        rf: float = 0.04,
-    ) -> Dict:
-        """
-        Circular block bootstrap p-value under H₀: Sharpe Ratio = 0.
+def monthly(ret: pd.Series) -> pd.Series:
+    return (1 + ret).groupby([ret.index.year, ret.index.month]).prod() - 1
 
-        Why not a standard t-test?
-        --------------------------
-        The SR t-test assumes i.i.d. returns. Monthly-rebalanced strategy
-        returns are autocorrelated (momentum in holdings, regime persistence),
-        so the i.i.d. standard error is downward-biased → the t-test
-        over-rejects H₀ (false positives). Block bootstrap preserves the
-        autocorrelation structure.
 
-        Circular block bootstrap procedure:
-        1. Treat the return series as circular (wrapping around at the end)
-        2. Randomly sample starting indices, take blocks of length b = 21
-        3. Centre the series at zero once before resampling (enforces H₀: SR = 0)
-        4. Compute bootstrap SR; repeat B = 5000 times
-        5. p-value = fraction of bootstrap SRs ≥ observed SR
+def rank_ic(signal: pd.Series, outcome: pd.Series, min_assets: int = 5) -> pd.Series:
+    """Spearman correlation across assets on each date. Both inputs are indexed by (date, ticker)."""
+    df = pd.concat([signal.rename("s"), outcome.rename("o")], axis=1).dropna()
+    out = {}
+    for d, g in df.groupby(level="date"):
+        if len(g) >= min_assets:
+            out[d] = stats.spearmanr(g["s"], g["o"]).statistic
+    return pd.Series(out, dtype=float)
 
-        Block size b = 21 ≈ 1 trading month. Politis & Romano (1994) suggest
-        b ∝ T^(1/3) as the optimal rate; for T=1260 this gives b ≈ 11.
-        We use b = 21 to be conservative (preserves more autocorrelation).
 
-        Returns
-        -------
-        dict
-            observed_sr, p_value, significant_5pct
-        """
-        ex = (returns.dropna() - rf / 252).values
-        n = len(ex)
-        obs_sr = float(np.sqrt(252) * ex.mean() / ex.std())
+def nw_tstat(x: np.ndarray, lags: int) -> float:
+    """t-statistic of the mean with a Newey-West (Bartlett) standard error."""
+    x = np.asarray(x, float)
+    n = len(x)
+    e = x - x.mean()
+    v = e @ e / n
+    for l in range(1, lags + 1):
+        v += 2 * (1 - l / (lags + 1)) * (e[l:] @ e[:-l]) / n
+    return float(x.mean() / np.sqrt(v / n))
 
-        # Impose H0 once on the original series, then resample. Demeaning each
-        # bootstrap sample instead would make every null Sharpe exactly zero
-        # and return p = 0 for any positive observed Sharpe.
-        centred = ex - ex.mean()
-        rng = np.random.default_rng(SEED)
-        null_srs = []
-        for _ in range(n_bootstrap):
-            starts = rng.integers(0, n, size=n // block_size + 1)
-            idx = np.concatenate([np.arange(s, s + block_size) % n for s in starts])[:n]
-            boot = centred[idx]
-            null_srs.append(np.sqrt(252) * boot.mean() / (boot.std() + 1e-10))
 
-        p = float(np.mean(np.array(null_srs) >= obs_sr))
-        return {"observed_sr": obs_sr, "p_value": p, "significant_5pct": p < 0.05}
-
-    @staticmethod
-    def deflated_sharpe_ratio(
-        observed_sharpe: float,
-        n_trials: int,
-        n_obs: int,
-        skewness: float = 0.0,
-        excess_kurtosis: float = 0.0,
-    ) -> Dict:
-        """
-        Deflated Sharpe Ratio (Harvey & Liu 2015).
-
-        The problem: if we test N strategy configurations and report the best
-        Sharpe, we are guaranteed to find a large SR by chance even if all
-        strategies have zero true Sharpe. The DSR adjusts the significance
-        threshold upward proportionally to the number of trials.
-
-        The threshold SR under N independent trials is approximated by the
-        expected maximum of N standard normals, scaled by 1/√T:
-
-            E[max SR] ≈ (1-γ)·Φ⁻¹(1 - 1/N) + γ·Φ⁻¹(1 - 1/(N·e))
-
-        where γ = 0.5772 is the Euler-Mascheroni constant. This is the
-        Gumbel approximation to the expected maximum of N i.i.d. normals.
-
-        The threshold is adjusted for non-normality (Harvey & Liu eq. 8):
-
-            SR* = E[max SR]/√T · √(1 - γ₃·SR̂ + (γ₄-1)/4·SR̂²)
-
-        where γ₃ = skewness and γ₄ = excess kurtosis. Negative return skew
-        (common in crisis periods) raises the threshold; positive skew lowers it.
-
-        DSR = observed_SR / SR*. DSR > 1 → the Sharpe is significant even
-        after penalising for the number of configurations tested.
-
-        Parameters
-        ----------
-        n_trials : int
-            Number of strategy configurations evaluated. In this pipeline,
-            n_trials = number of assets with IC > 0 (each asset's ML model
-            is a separate "trial"). Conservative lower bound: use 1 to skip
-            the penalty entirely; use 50 for a strict test.
-        n_obs    : int
-            Number of daily return observations in the backtest.
-        """
-        g = 0.5772  # Euler-Mascheroni constant
-        E_max = (
-            (1 - g) * stats.norm.ppf(1 - 1 / n_trials)
-            + g * stats.norm.ppf(1 - 1 / (n_trials * np.e))
-        ) if n_trials > 1 else 0.0
-
-        # The variance-inflation factor uses the per-period Sharpe ratio and the
-        # raw (not excess) kurtosis: 1 - skew*SR + (kurt - 1)/4 * SR^2, with
-        # kurt = excess_kurtosis + 3 (Mertens 2002). Using the annualised SR and
-        # excess kurtosis made the radicand negative for SR > 2 (NaN threshold).
-        sr_per = observed_sharpe / np.sqrt(252)
-        infl = (
-            1
-            - skewness * sr_per
-            + (excess_kurtosis + 3 - 1) / 4 * sr_per ** 2
-        )
-        thr_ann = E_max / np.sqrt(n_obs) * np.sqrt(max(infl, 1e-12)) * np.sqrt(252)
-        dsr = observed_sharpe / max(thr_ann, 1e-10)
-        return {"DSR": dsr, "sr_threshold_ann": thr_ann, "passes_dsr": dsr > 1.0}
-
-    @staticmethod
-    def live_cross_sectional_ic(
-        preds: Dict, prices: pd.DataFrame, horizon: int
-    ) -> pd.Series:
-        """
-        Cross-sectional Spearman IC per rebalance date.
-
-        preds maps rebalance date -> {ticker: forecast made with data up to that
-        date}. The realised return for each ticker is the price change from the
-        rebalance date to `horizon` trading days later. Dates without a full
-        forward window, or with fewer than 5 assets, are skipped.
-        """
-        out = {}
-        idx = prices.index
-        for d, p in sorted(preds.items()):
-            loc = idx.get_loc(d)
-            if loc + horizon >= len(idx) or len(p) < 5:
-                continue
-            fwd = prices.iloc[loc + horizon] / prices.iloc[loc] - 1.0
-            s = pd.Series(p)
-            r = fwd.reindex(s.index)
-            ok = s.notna() & r.notna()
-            if ok.sum() >= 5:
-                out[d] = float(stats.spearmanr(s[ok], r[ok]).statistic)
-        return pd.Series(out, name="live_ic", dtype=float)
-
-    @staticmethod
-    def ic_significance(ic_series: pd.Series, hac_lags: int = 0) -> Dict:
-        """
-        Test H₀: mean IC = 0 on the IC time series.
-
-        With ``hac_lags > 0`` the t-statistic uses a Newey-West standard error.
-        Use it when consecutive ICs come from overlapping training windows
-        (a 504-day window refitted monthly overlaps the next ~23 fits), which
-        makes a plain one-sample t-test treat ~23 near-copies as independent.
-
-        ICIR = mean IC / std(IC) — the information ratio of the alpha signal.
-        A rule of thumb: ICIR > 0.5 is considered a strong alpha signal.
-
-        Returns
-        -------
-        dict
-            mean_IC, ICIR, t_stat, p_value, significant_5pct
-        """
-        ic = ic_series.dropna()
-        if len(ic) < 5:
-            return {"error": "Insufficient observations (need ≥ 5)"}
-        if hac_lags > 0:
-            import statsmodels.api as sm
-            fit = sm.OLS(ic.values, np.ones(len(ic))).fit(
-                cov_type="HAC", cov_kwds={"maxlags": min(hac_lags, len(ic) - 1)}
-            )
-            t, p = float(fit.tvalues[0]), float(fit.pvalues[0])
-        else:
-            t, p = stats.ttest_1samp(ic, popmean=0.0)
-        icir = float(ic.mean() / ic.std()) if ic.std() > 0 else np.nan
-        return {
-            "mean_IC": float(ic.mean()),
-            "ICIR": icir,
-            "t_stat": float(t),
-            "p_value": float(p),
-            "significant_5pct": p < 0.05,
-        }
-
-    @classmethod
-    def report(
-        cls,
-        portfolio_history: pd.DataFrame,
-        all_ml_metrics: Dict,
-        n_trials: int = 10,
-        rf: float = 0.04,
-    ) -> None:
-        """Print a formatted statistical significance report to stdout."""
-        ret = portfolio_history["portfolio_value"].pct_change().dropna()
-
-        print("\n" + "=" * 55)
-        print("  STATISTICAL SIGNIFICANCE REPORT")
-        print("=" * 55)
-
-        bbs = cls.block_bootstrap_sharpe(ret, rf=rf)
-        print(f"\n[1] Block-Bootstrap Sharpe (H₀: SR=0, B=5000, block=21d)")
-        print(
-            f"    SR={bbs['observed_sr']:.3f}  p={bbs['p_value']:.4f}  "
-            f"{'✓ Significant' if bbs['significant_5pct'] else '✗ Not significant'} at 5%"
-        )
-
-        dsr = cls.deflated_sharpe_ratio(
-            bbs["observed_sr"], n_trials, len(ret),
-            skewness=float(ret.skew()), excess_kurtosis=float(ret.kurt()),
-        )
-        print(f"\n[2] Deflated Sharpe Ratio (Harvey & Liu 2015, n_trials={n_trials})")
-        print(
-            f"    DSR={dsr['DSR']:.3f}  threshold={dsr['sr_threshold_ann']:.3f}  "
-            f"{'✓ Passes' if dsr['passes_dsr'] else '✗ Fails'}"
-        )
-
-        if all_ml_metrics:
-            ic_vals = pd.Series(
-                {t: m.get("IC", np.nan) for t, m in all_ml_metrics.items()}
-            ).dropna()
-            if len(ic_vals):
-                # Descriptive only. A t-test across assets would treat highly
-                # correlated ETFs as independent draws; per-asset tests on the
-                # IC history (with HAC errors) are reported by the pipeline.
-                print(f"\n[3] ML Signal IC, latest fit (all {len(ic_vals)} assets, descriptive)")
-                print(
-                    f"    mean_IC={ic_vals.mean():.4f}  median_IC={ic_vals.median():.4f}  "
-                    f"share_positive={(ic_vals > 0).mean():.0%}"
-                )
-                print("    Inflated by pooled time-series ranking and overlapping labels; not evidence of skill.")
-                print("    Use the live cross-sectional IC printed by the pipeline instead.")
-
-        print("=" * 55)
+def ic_stats(ic: pd.Series, lags: int = 3) -> Dict:
+    """Mean IC, Newey-West t-statistic and p-value, share of positive months."""
+    x = ic.dropna().values
+    t = nw_tstat(x, lags)
+    return {"n": int(len(x)), "mean": float(x.mean()), "std": float(x.std(ddof=1)),
+            "t_stat": t, "p_value": float(2 * (1 - stats.norm.cdf(abs(t)))),
+            "share_positive": float((x > 0).mean()),
+            # smallest mean IC that would give |t| = 2 with this many months and this dispersion
+            "detectable_ic": float(2 * x.std(ddof=1) / np.sqrt(len(x)))}

@@ -1,135 +1,53 @@
-"""
-tests/test_data.py — Unit tests for DataEngine.
-
-Tests cover:
-- open data helpers: par bond returns, equal BL prior
-- engineer_features: output shape, no look-ahead, feature completeness
-- ffill gap-filling behaviour
-"""
-
 import numpy as np
 import pandas as pd
-import pytest
 
-from src.data import DataEngine
-
-
-# ── Fixtures ───────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def price_df():
-    """Synthetic daily price series for 3 tickers over 300 days."""
-    dates = pd.date_range("2022-01-01", periods=300, freq="B")
-    np.random.seed(42)
-    prices = pd.DataFrame(
-        {
-            "SPY": 400 * np.cumprod(1 + np.random.normal(0.0004, 0.01, 300)),
-            "TLT": 120 * np.cumprod(1 + np.random.normal(-0.0001, 0.005, 300)),
-            "GLD": 180 * np.cumprod(1 + np.random.normal(0.0002, 0.007, 300)),
-        },
-        index=dates,
-    )
-    return prices
+from src.config import Config
+from src.data import FEATURES, all_features, asset_features, load_panel, month_ends
 
 
-@pytest.fixture
-def data_engine(price_df):
-    """DataEngine pre-loaded with synthetic prices."""
-    de = DataEngine("2022-01-01", "2023-01-01")
-    de.data["prices"] = price_df
-    return de
+def test_features_are_causal(prices):
+    """A feature on day t must not change when later prices are removed."""
+    full = asset_features(prices["C"])
+    cut = 900
+    part = asset_features(prices["C"].iloc[: cut + 1])
+    pd.testing.assert_series_equal(full.iloc[cut], part.iloc[cut])
+    pd.testing.assert_frame_equal(full.iloc[: cut + 1], part)
 
 
-# ── Tests: open data helpers ───────────────────────────────────────────────────
-
-class TestOpenData:
-    def test_par_bond_returns_sign(self):
-        from src.opendata import par_bond_returns
-        y = pd.Series([4.0, 4.0, 4.5, 4.0], index=pd.date_range("2024-01-01", periods=4))
-        r = par_bond_returns(y, 10)
-        assert r.iloc[1] < 0 < r.iloc[2]          # yield up, price down
-        assert abs(r.iloc[0] - 0.04 / 252) < 1e-12  # flat yield earns carry
-
-    def test_equal_prior_weights(self):
-        caps = DataEngine("2020-01-01", "2020-12-31").fetch_market_caps(["SPY", "TLT"])
-        assert (caps == 1.0).all()
+def test_feature_set_and_warm_up(prices):
+    f = asset_features(prices["A"])
+    assert list(f.columns) == FEATURES and len(FEATURES) == 18
+    assert f.iloc[:252].isna().all().all()
+    assert f.iloc[300:].notna().all().all()
 
 
-# ── Tests: engineer_features ───────────────────────────────────────────────────
-
-class TestEngineerFeatures:
-    def test_returns_dict_with_all_tickers(self, data_engine, price_df):
-        feat = data_engine.engineer_features()
-        assert set(feat.keys()) == set(price_df.columns)
-
-    def test_feature_columns_present(self, data_engine):
-        feat = data_engine.engineer_features()
-        f = feat["SPY"]
-        expected = [
-            "mom_5d", "mom_21d", "mom_63d", "mom_252d",
-            "vol_5d", "vol_21d", "vol_63d", "vol_252d",
-            "price_to_sma20", "sma20_to_sma50",
-            "macd", "macd_hist", "bb_width", "rsi",
-            "ret_mean_63d", "ret_skew_63d", "ret_kurt_63d",
-        ]
-        for col in expected:
-            assert col in f.columns, f"Missing feature: {col}"
-
-    def test_cutoff_date_prevents_lookahead(self, data_engine, price_df):
-        """Features with cutoff_date must not use data beyond that date."""
-        cutoff = "2022-06-01"
-        feat = data_engine.engineer_features(cutoff_date=cutoff)
-        for ticker, df in feat.items():
-            assert df.index.max() <= pd.Timestamp(cutoff), \
-                f"{ticker}: feature index exceeds cutoff_date"
-
-    def test_no_lookahead_shorter_than_full(self, data_engine, price_df):
-        """Features up to cutoff should have fewer rows than full-period features."""
-        full_feat = data_engine.engineer_features()
-        cutoff_feat = data_engine.engineer_features(cutoff_date="2022-06-01")
-        assert len(cutoff_feat["SPY"]) < len(full_feat["SPY"])
-
-    def test_feature_values_are_finite_after_warmup(self, data_engine):
-        """Most features need ≥252 days to stabilise — check past warmup period."""
-        feat = data_engine.engineer_features()
-        f = feat["SPY"].iloc[252:]
-        finite_ratio = f.drop(columns=["price"]).notna().mean().mean()
-        assert finite_ratio > 0.95, f"Too many NaNs after warmup: {finite_ratio:.2%}"
+def test_features_do_not_depend_on_price_level(prices):
+    a, b = asset_features(prices["B"]), asset_features(prices["B"] * 37.0)
+    pd.testing.assert_frame_equal(a, b, check_exact=False, rtol=1e-9)
 
 
-# ── Tests: gap-filling ─────────────────────────────────────────────────────────
-
-class TestGapFilling:
-    def test_ffill_short_gaps(self):
-        """ffill(limit=5) should fill up to 5 consecutive NaNs."""
-        dates = pd.date_range("2022-01-01", periods=10, freq="B")
-        prices = pd.Series([100, np.nan, np.nan, np.nan, np.nan, np.nan, 106, 107, 108, 109],
-                           index=dates, name="SPY")
-        filled = prices.ffill(limit=5)
-        assert filled.iloc[1] == 100  # filled
-        assert filled.iloc[5] == 100  # limit reached — still filled (count=5)
-
-    def test_ffill_respects_limit(self):
-        """Gaps longer than 5 days should remain NaN after ffill(limit=5)."""
-        dates = pd.date_range("2022-01-01", periods=10, freq="B")
-        prices = pd.Series([100] + [np.nan] * 8 + [109], index=dates, name="SPY")
-        filled = prices.ffill(limit=5)
-        assert np.isnan(filled.iloc[6])  # 6th gap exceeds limit
+def test_late_starting_asset_gets_its_own_warm_up(prices):
+    p = prices["D"].copy()
+    p.iloc[:400] = np.nan
+    f = asset_features(p)
+    assert f.iloc[:652].isna().all().all() and f.iloc[660:].notna().all().all()
 
 
-class TestLiveIC:
-    def test_perfect_forecast_gives_ic_one(self):
-        from src.backtest import StatisticalTests
-        idx = pd.bdate_range("2023-01-02", periods=60)
-        growth = np.linspace(0.0, 0.01, 6)
-        prices = pd.DataFrame({f"A{i}": 100 * (1 + g) ** np.arange(60) for i, g in enumerate(growth)}, index=idx)
-        preds = {idx[10]: {f"A{i}": g for i, g in enumerate(growth)}}
-        ic = StatisticalTests.live_cross_sectional_ic(preds, prices, horizon=21)
-        assert ic.iloc[0] == pytest.approx(1.0)
+def test_month_ends_are_last_trading_days(prices):
+    me = month_ends(prices.index)
+    assert me.isin(prices.index).all()
+    nxt = prices.index[prices.index.get_indexer(me[:-1]) + 1]
+    assert (nxt.month != me[:-1].month).all()
 
-    def test_skips_dates_without_forward_window(self):
-        from src.backtest import StatisticalTests
-        idx = pd.bdate_range("2023-01-02", periods=30)
-        prices = pd.DataFrame({f"A{i}": np.arange(30) + 100.0 + i for i in range(6)}, index=idx)
-        preds = {idx[20]: {f"A{i}": float(i) for i in range(6)}}
-        assert StatisticalTests.live_cross_sectional_ic(preds, prices, horizon=21).empty
+
+def test_snapshot_panel():
+    cfg = Config()
+    panel = load_panel(cfg)
+    px = panel["prices"]
+    assert list(px.columns) == cfg.universe
+    assert px.index[0] == pd.Timestamp("1990-07-02") and px.index.is_monotonic_increasing
+    assert px.drop(columns="TLT").notna().all().all()
+    assert px["TLT"].first_valid_index() == pd.Timestamp("1993-10-01")
+    assert panel["rf"].notna().all() and (panel["rf"] >= 0).all()
+    assert set(panel["yields"].columns) == {"DGS7", "DGS10", "DGS20", "DBAA"}
+    assert len(all_features(px.iloc[:400])) == 13

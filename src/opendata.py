@@ -125,6 +125,11 @@ def market_prices(start: str | None = None, end: str | None = None) -> pd.DataFr
 # ---------------------------------------------------------------------------
 # Bond returns from constant maturity yields (FRED H.15)
 # ---------------------------------------------------------------------------
+def par_bond_duration(y: pd.Series, maturity: float) -> pd.Series:
+    """Modified duration of a semiannual par bond with yield y (decimal)."""
+    return (1 - (1 + y / 2.0) ** (-2 * maturity)) / y
+
+
 def par_bond_returns(yields_pct: pd.Series, maturity: float) -> pd.Series:
     """Daily total return of a constant maturity par bond implied by a yield series.
 
@@ -137,8 +142,7 @@ def par_bond_returns(yields_pct: pd.Series, maturity: float) -> pd.Series:
     yp = y.shift(1)
     h = yp / 2.0
     n = 2 * maturity
-    # modified duration of a par bond
-    D = (1 - (1 + h) ** (-n)) / yp
+    D = par_bond_duration(yp, maturity)
     C = (2 / yp**2) * (1 - (1 + h) ** (-n)) - (2 * maturity / (yp * (1 + h) ** (n + 1)))
     r = yp / 252.0 - D * dy + 0.5 * C * dy**2
     return r.dropna()

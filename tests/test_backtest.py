@@ -1,283 +1,123 @@
-"""
-tests/test_backtest.py — Unit tests for PortfolioBacktester and StatisticalTests.
-
-Tests cover:
-- PortfolioBacktester.run: portfolio value monotonicity, cost deduction
-- PortfolioBacktester.metrics: output keys, Sharpe sign, drawdown ≤ 0
-- StatisticalTests.block_bootstrap_sharpe: p-value bounds, H₀ rejection
-- StatisticalTests.deflated_sharpe_ratio: DSR monotonicity in n_trials
-- StatisticalTests.ic_significance: t-test correctness
-"""
-
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
-from src.backtest import PortfolioBacktester, StatisticalTests
-
-
-# ── Fixtures ───────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def prices():
-    """Synthetic 3-asset price panel (252 days)."""
-    np.random.seed(42)
-    n = 252
-    dates = pd.date_range("2022-01-01", periods=n, freq="B")
-    spy = 400 * np.cumprod(1 + np.random.normal(0.0004, 0.01, n))
-    tlt = 120 * np.cumprod(1 + np.random.normal(-0.0001, 0.005, n))
-    gld = 180 * np.cumprod(1 + np.random.normal(0.0002, 0.007, n))
-    return pd.DataFrame({"SPY": spy, "TLT": tlt, "GLD": gld}, index=dates)
+from src import backtest as bt
+from src.data import month_ends
 
 
-@pytest.fixture
-def equal_weights(prices):
-    """Equal-weight target, rebalanced monthly."""
-    n = len(prices.columns)
-    return pd.DataFrame(
-        np.ones((len(prices), n)) / n,
-        index=prices.index, columns=prices.columns,
-    )
+@pytest.fixture(scope="module")
+def targets(prices):
+    reb = month_ends(prices.index)[1:-1]
+    return pd.DataFrame(1 / 6, index=reb, columns=prices.columns)
 
 
-@pytest.fixture
-def backtester():
-    return PortfolioBacktester(initial_capital=100_000, risk_free_rate=0.04)
+def test_returns_start_the_day_after_the_first_rebalance(prices, targets):
+    r = bt.backtest(prices, targets)["returns"]
+    assert r.index[0] == prices.index[prices.index.get_loc(targets.index[0]) + 1]
+    assert r.index[-1] == prices.index[-1]
 
 
-# ── Tests: PortfolioBacktester.run ─────────────────────────────────────────────
-
-class TestBacktesterRun:
-    def test_returns_dataframe(self, backtester, prices, equal_weights):
-        ph = backtester.run(prices, equal_weights)
-        assert isinstance(ph, pd.DataFrame)
-
-    def test_portfolio_value_column_exists(self, backtester, prices, equal_weights):
-        ph = backtester.run(prices, equal_weights)
-        assert "portfolio_value" in ph.columns
-
-    def test_initial_value(self, backtester, prices, equal_weights):
-        ph = backtester.run(prices, equal_weights)
-        # First day should be approximately the initial capital
-        assert abs(ph["portfolio_value"].iloc[0] - 100_000) < 1000
-
-    def test_length_matches_price_index(self, backtester, prices, equal_weights):
-        ph = backtester.run(prices, equal_weights)
-        common = prices.index.intersection(equal_weights.index)
-        assert len(ph) == len(common)
-
-    def test_portfolio_value_positive(self, backtester, prices, equal_weights):
-        ph = backtester.run(prices, equal_weights)
-        assert (ph["portfolio_value"] > 0).all()
-
-    def test_transaction_costs_reduce_value(self):
-        """With constant weights there is still turnover at each rebalance.
-
-        The backtester should remain solvent (positive portfolio value) even
-        after deducting realistic transaction costs every period.
-        """
-        np.random.seed(0)
-        n = 60
-        dates = pd.date_range("2022-01-01", periods=n, freq="B")
-        prices_small = pd.DataFrame(
-            {"A": 100 + np.cumsum(np.random.normal(0, 0.5, n))}, index=dates
-        )
-        wts = pd.DataFrame({"A": np.ones(n)}, index=dates)
-
-        bt = PortfolioBacktester(100_000)
-        ph = bt.run(prices_small, wts, freq="W")
-        assert ph["portfolio_value"].iloc[-1] > 0  # costs must not bankrupt the portfolio
+def test_single_asset_matches_its_own_return(prices, targets):
+    t = targets * 0.0
+    t["B"] = 1.0
+    r = bt.backtest(prices, t, cost_mult=1.0)
+    np.testing.assert_allclose(r["returns"].values, prices["B"].pct_change().loc[r["returns"].index].values, atol=1e-12)
+    assert (r["turnover"] < 1e-12).all()
 
 
-# ── Tests: PortfolioBacktester.metrics ────────────────────────────────────────
-
-class TestBacktesterMetrics:
-    def test_required_keys(self, backtester, prices, equal_weights):
-        backtester.run(prices, equal_weights)
-        m = backtester.metrics()
-        for key in ["Ann. Return", "Ann. Volatility", "Sharpe Ratio", "Sortino Ratio", "Max Drawdown"]:
-            assert key in m
-
-    def test_max_drawdown_non_positive(self, backtester, prices, equal_weights):
-        backtester.run(prices, equal_weights)
-        m = backtester.metrics()
-        mdd = float(m["Max Drawdown"].strip("%")) / 100
-        assert mdd <= 0
-
-    def test_benchmark_adds_beta_alpha(self, backtester, prices, equal_weights):
-        backtester.run(prices, equal_weights)
-        benchmark = prices["SPY"].pct_change()
-        m = backtester.metrics(benchmark=benchmark)
-        assert "Beta" in m
-        assert "Alpha (ann.)" in m
+def test_first_period_is_the_weighted_asset_return(prices, targets):
+    r = bt.backtest(prices, targets, cost_mult=0.0)["returns"]
+    a, b = targets.index[0], targets.index[1]
+    want = (prices.loc[b] / prices.loc[a] - 1).mean()
+    np.testing.assert_allclose((1 + r.loc[:b]).prod() - 1, want, rtol=1e-10)
 
 
-# ── Tests: StatisticalTests.block_bootstrap_sharpe ───────────────────────────
-
-class TestBlockBootstrapSharpe:
-    def test_p_value_in_unit_interval(self):
-        np.random.seed(0)
-        ret = pd.Series(np.random.normal(0.0004, 0.01, 500))
-        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=200)
-        assert 0.0 <= result["p_value"] <= 1.0
-
-    def test_high_sr_is_significant(self):
-        """Deterministically positive returns → very low p-value."""
-        np.random.seed(42)
-        ret = pd.Series(np.random.normal(0.002, 0.005, 500))  # SR ≈ 6+
-        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=500)
-        assert result["p_value"] < 0.05
-
-    def test_zero_return_not_significant(self):
-        """Centred returns → SR ≈ 0 → p-value should not be very small."""
-        np.random.seed(7)
-        ret = pd.Series(np.random.normal(0.0, 0.01, 500))
-        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=500)
-        assert result["p_value"] > 0.01  # not aggressively rejecting H₀
-
-    def test_modest_sr_not_significant(self):
-        """Sharpe about 0.4 over five years has a standard error near 0.45.
-
-        Regression: demeaning each bootstrap sample made every null Sharpe zero,
-        so any positive Sharpe got p = 0.
-        """
-        rng = np.random.default_rng(3)
-        r = rng.normal(0.0, 0.01, 1260)
-        ex = r - r.mean() + 0.4 * 0.01 / np.sqrt(252)   # excess SR exactly 0.4
-        ret = pd.Series(ex + 0.04 / 252)
-        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=1000)
-        assert abs(result["observed_sr"] - 0.4) < 0.02
-        assert 0.1 < result["p_value"] < 0.5
-
-    def test_returns_observed_sr(self):
-        ret = pd.Series(np.random.normal(0.0004, 0.01, 300))
-        result = StatisticalTests.block_bootstrap_sharpe(ret, n_bootstrap=100)
-        assert "observed_sr" in result
-        assert np.isfinite(result["observed_sr"])
+def test_costs_equal_turnover_times_cost(prices, targets):
+    rng = np.random.default_rng(3)
+    w = pd.DataFrame(rng.dirichlet(np.ones(6), len(targets)), index=targets.index, columns=targets.columns)
+    free, paid = bt.backtest(prices, w, 0.0), bt.backtest(prices, w, 1.0)
+    assert (paid["returns"] <= free["returns"] + 1e-15).all()
+    d = w.index[3]
+    cost = bt.cost_vector(prices.columns)
+    assert np.allclose(cost, 8e-4 + 5e-4)           # synthetic tickers use the default spread
+    drag = 1 - (1 + paid["returns"].loc[d]) / (1 + free["returns"].loc[d])
+    np.testing.assert_allclose(drag, 2 * paid["turnover"].loc[d] * cost[0], rtol=1e-6)
+    assert 0 < paid["turnover"].mean() < 1
 
 
-# ── Tests: StatisticalTests.deflated_sharpe_ratio ────────────────────────────
-
-class TestDeflatedSharpeRatio:
-    def test_more_trials_lowers_dsr(self):
-        """More strategies tested → higher threshold → lower DSR."""
-        dsr_1 = StatisticalTests.deflated_sharpe_ratio(1.0, n_trials=1, n_obs=252)
-        dsr_10 = StatisticalTests.deflated_sharpe_ratio(1.0, n_trials=10, n_obs=252)
-        dsr_100 = StatisticalTests.deflated_sharpe_ratio(1.0, n_trials=100, n_obs=252)
-        assert dsr_1["DSR"] >= dsr_10["DSR"] >= dsr_100["DSR"]
-
-    def test_dsr_passes_for_high_sharpe(self):
-        result = StatisticalTests.deflated_sharpe_ratio(3.0, n_trials=5, n_obs=500)
-        assert result["passes_dsr"]
-
-    def test_dsr_fails_for_low_sharpe_many_trials(self):
-        result = StatisticalTests.deflated_sharpe_ratio(0.3, n_trials=50, n_obs=252)
-        assert not result["passes_dsr"]
+def test_summarize_uses_the_bill_rate(prices, targets):
+    r = bt.backtest(prices, targets)["returns"]
+    zero, some = pd.Series(0.0, index=r.index), pd.Series(0.04 / 252, index=r.index)
+    a, b = bt.summarize(r, zero), bt.summarize(r, some)
+    np.testing.assert_allclose(a["ann_excess"] - b["ann_excess"], 0.04, rtol=1e-9)
+    assert a["sharpe"] > b["sharpe"] and a["max_drawdown"] < 0 and a["n_days"] == len(r)
 
 
-# ── Tests: StatisticalTests.ic_significance ───────────────────────────────────
-
-class TestICSig:
-    def test_significant_positive_ic(self):
-        ic = pd.Series([0.08, 0.09, 0.07, 0.10, 0.08, 0.09, 0.07, 0.08])
-        result = StatisticalTests.ic_significance(ic)
-        assert result["significant_5pct"]
-        assert result["mean_IC"] > 0
-
-    def test_zero_ic_not_significant(self):
-        np.random.seed(0)
-        ic = pd.Series(np.random.normal(0, 0.01, 30))
-        result = StatisticalTests.ic_significance(ic)
-        # Should rarely reject H₀ for truly zero-mean IC
-        assert "mean_IC" in result
-
-    def test_insufficient_data(self):
-        ic = pd.Series([0.05, 0.06, 0.04])
-        result = StatisticalTests.ic_significance(ic)
-        assert "error" in result
-
-    def test_icir_computation(self):
-        ic = pd.Series([0.10, 0.08, 0.12, 0.09, 0.11])
-        result = StatisticalTests.ic_significance(ic)
-        expected_icir = ic.mean() / ic.std()
-        assert abs(result["ICIR"] - expected_icir) < 1e-10
+def test_sharpe_interval_contains_the_estimate():
+    rng = np.random.default_rng(0)
+    x = pd.Series(rng.normal(0.0004, 0.01, 2500))
+    ci = bt.sharpe_ci(x, n_boot=500)
+    assert ci["lo"] < ci["sharpe"] < ci["hi"]
+    assert 0.5 < ci["hi"] - ci["lo"] < 2.5          # about 4 / sqrt(10 years)
 
 
-class TestMinAssets:
-    """Fully invested long-only weights capped at w need ceil(1 / w) assets."""
-
-    def test_thirty_percent_cap_needs_four(self):
-        from src.pipeline import min_assets
-        assert min_assets(0.30) == 4
-        assert min_assets(0.25) == 4
-        assert min_assets(0.20) == 5
-        assert min_assets(0.50) == 3
-
-# ── Tests: like-for-like comparison window ────────────────────────────────────
-
-from src.backtest import comparison_table, summarize_returns
+def test_sharpe_difference():
+    rng = np.random.default_rng(1)
+    base = rng.normal(0.0003, 0.01, 3000)
+    a = pd.Series(base)
+    same = bt.sharpe_diff_test(a, a, n_boot=200)
+    assert same["diff"] == 0 and same["p_value"] == 1.0
+    better = pd.Series(base + 0.002)
+    out = bt.sharpe_diff_test(better, a, n_boot=500)
+    assert out["diff"] > 2 and out["lo"] > 0 and out["p_value"] < 0.01
+    noise = pd.Series(base + rng.normal(0, 0.002, 3000))
+    assert bt.sharpe_diff_test(noise, a, n_boot=500)["p_value"] > 0.05
 
 
-class TestComparison:
-    def test_metrics_window_excludes_warmup(self, backtester, prices, equal_weights):
-        backtester.run(prices, equal_weights)
-        start = prices.index[100]
-        full = backtester.metrics()
-        windowed = backtester.metrics(start=start)
-        assert full != windowed
-
-    def test_comparison_starts_after_eval_start(self, prices):
-        ret = prices.pct_change()
-        start, end = prices.index[60], prices.index[-1]
-        tbl = comparison_table({"A": ret["SPY"], "B": ret["TLT"]}, 0.04, ret["SPY"], start, end)
-        assert set(tbl.window) == {"full", "first_half", "second_half"}
-        full = tbl[(tbl.strategy == "A") & (tbl.window == "full")].iloc[0]
-        assert pd.Timestamp(full.window_start) > start
-        assert full.n_days == int((ret.index > start).sum())
-
-    def test_benchmark_against_itself_has_unit_beta(self, prices):
-        r = prices["SPY"].pct_change()
-        out = summarize_returns(r, 0.04, r)
-        assert abs(out["beta"] - 1.0) < 1e-9
-        assert abs(out["alpha_ann"]) < 1e-9
-
-    def test_halves_partition_the_window(self, prices):
-        r = prices["GLD"].pct_change()
-        start, end = prices.index[10], prices.index[-1]
-        tbl = comparison_table({"G": r}, 0.0, None, start, end)
-        n = tbl.set_index("window").n_days
-        assert n["first_half"] + n["second_half"] == n["full"]
+def test_deflated_sharpe_ratio():
+    # one trial, normal returns: the probabilistic Sharpe ratio against zero
+    out = bt.deflated_sharpe(0.1, 121, 0.0, 3.0)
+    np.testing.assert_allclose(out["dsr"], stats.norm.cdf(0.1 * np.sqrt(120) / np.sqrt(1 + 0.5 * 0.01)))
+    assert bt.deflated_sharpe(0.0, 100, 0.0, 3.0)["dsr"] == 0.5
+    # more trials or more dispersion across trials raise the hurdle
+    a = bt.deflated_sharpe(0.1, 121, 0.0, 3.0, n_trials=5, trials_sr_std=0.05)
+    b = bt.deflated_sharpe(0.1, 121, 0.0, 3.0, n_trials=50, trials_sr_std=0.05)
+    assert out["dsr"] > a["dsr"] > b["dsr"] and 0 < a["sr0"] < b["sr0"]
+    # expected maximum of 5 standard normals is about 1.16; the approximation gives 1.19
+    assert abs(a["sr0"] / 0.05 - 1.163) < 0.05
+    # negative skew and fat tails lower the confidence in a positive Sharpe ratio
+    assert bt.deflated_sharpe(0.1, 121, -1.0, 8.0)["dsr"] < out["dsr"]
 
 
-class TestBootstrapNull:
-    def test_matches_analytic_pvalue_for_iid_returns(self):
-        """For iid returns the bootstrap p-value should be close to the
-        one-sided normal p-value 1 - Phi(SR * sqrt(years)). The old code gave
-        p = 0 for any positive Sharpe."""
-        from scipy.stats import norm
-        for seed in (3, 5, 8):
-            rng = np.random.default_rng(seed)
-            r = pd.Series(rng.normal(0.04 / 252 + 0.0001, 0.0065, 756))
-            out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=2000, rf=0.04)
-            analytic = 1 - norm.cdf(out["observed_sr"] * np.sqrt(756 / 252))
-            assert abs(out["p_value"] - analytic) < 0.06
-
-    def test_strong_signal_is_significant(self):
-        rng = np.random.default_rng(4)
-        r = pd.Series(rng.normal(0.04 / 252 + 0.002, 0.006, 1500))  # SR above 5
-        out = StatisticalTests.block_bootstrap_sharpe(r, n_bootstrap=1000, rf=0.04)
-        assert out["p_value"] < 0.01
+def test_rank_ic():
+    idx = pd.MultiIndex.from_product([pd.to_datetime(["2020-01-31", "2020-02-28"]), list("abcdef")],
+                                     names=["date", "ticker"])
+    s = pd.Series(np.tile(np.arange(6.0), 2), index=idx)
+    o = pd.Series(np.r_[np.arange(6.0), -np.arange(6.0)], index=idx)
+    ic = bt.rank_ic(s, o)
+    assert ic.iloc[0] == 1.0 and ic.iloc[1] == -1.0
+    assert bt.rank_ic(s[:4], o[:4]).empty           # fewer than 5 assets
 
 
-class TestICSignificanceHAC:
-    def test_hac_is_more_conservative_for_persistent_ics(self):
-        rng = np.random.default_rng(0)
-        # Highly persistent IC series, as from overlapping training windows
-        e = rng.normal(0, 0.05, 60)
-        ic = np.zeros(60)
-        for i in range(1, 60):
-            ic[i] = 0.9 * ic[i - 1] + e[i]
-        s = pd.Series(ic + 0.02)
-        plain = StatisticalTests.ic_significance(s)
-        hac = StatisticalTests.ic_significance(s, hac_lags=23)
-        assert abs(hac["t_stat"]) < abs(plain["t_stat"])
+def test_newey_west():
+    rng = np.random.default_rng(2)
+    x = rng.normal(0.1, 1, 400)
+    np.testing.assert_allclose(bt.nw_tstat(x, 0), stats.ttest_1samp(x, 0).statistic, rtol=2e-3)
+    ar = np.zeros(2000)
+    e = rng.normal(0, 1, 2000)
+    for i in range(1, 2000):
+        ar[i] = 0.7 * ar[i - 1] + e[i]
+    ar += 0.3
+    assert abs(bt.nw_tstat(ar, 12)) < abs(bt.nw_tstat(ar, 0))   # positive autocorrelation widens the error
+    s = bt.ic_stats(pd.Series(x))
+    np.testing.assert_allclose(s["detectable_ic"], 2 * x.std(ddof=1) / 20)
+    assert s["n"] == 400 and 0 < s["p_value"] < 1
+
+
+def test_monthly_compounding():
+    idx = pd.bdate_range("2020-01-01", "2020-02-28")
+    r = pd.Series(0.01, index=idx)
+    m = bt.monthly(r)
+    np.testing.assert_allclose(m.iloc[0], 1.01 ** (idx.month == 1).sum() - 1)

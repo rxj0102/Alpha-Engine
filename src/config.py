@@ -1,90 +1,47 @@
-"""
-config.py — Centralized configuration for the Alpha Engine.
-
-All model parameters, universe definitions, and cost assumptions live here.
-Edit this file to run experiments without touching any model code.
-"""
-
+"""Configuration. Every choice here was fixed before the long-sample run and none was tuned on its results."""
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
-# ── Random seed ────────────────────────────────────────────────────────────────
 SEED: int = 42
 
-# ── Asset universe ─────────────────────────────────────────────────────────────
-# Tickers are labels for open data stand ins (see src/opendata.py).
-# EEM and GLD were dropped: no free daily open source exists for them.
+# Labels keep the ETF tickers for readability; the data are open series (see src/opendata.py).
 UNIVERSE: List[str] = [
-    # Broad equities
-    "SPY", "QQQ", "IWM", "EFA",
-    # Sector (Ken French 12 industry portfolios)
-    "XLF", "XLE", "XLK", "XLV", "XLI",
-    # Fixed income (FRED constant maturity yields to par bond returns)
-    "TLT", "IEF", "LQD",
-    # Commodities
-    "USO",
+    "SPY", "QQQ", "IWM", "EFA",          # broad equity
+    "XLF", "XLE", "XLK", "XLV", "XLI",   # US sectors
+    "TLT", "IEF", "LQD",                 # bonds
+    "USO",                               # oil
 ]
+BONDS: List[str] = ["TLT", "IEF", "LQD"]
 
-# ── Transaction cost model ─────────────────────────────────────────────────────
-# Half bid-ask spread per ticker (bps → decimal). Illiquid names carry wider spreads.
-BID_ASK_SPREAD: dict = {
-    "SPY": 3e-4, "QQQ": 3e-4, "IWM": 5e-4, "EFA": 5e-4, "EEM": 8e-4,
-    "TLT": 4e-4, "IEF": 4e-4, "LQD": 6e-4, "GLD": 4e-4, "USO": 1e-3,
+# One-way cost per unit of notional traded: half bid-ask spread plus commission.
+# These are ETF-era assumptions applied to the whole sample.
+HALF_SPREAD: Dict[str, float] = {
+    "SPY": 3e-4, "QQQ": 3e-4, "IWM": 5e-4, "EFA": 5e-4,
+    "TLT": 4e-4, "IEF": 4e-4, "LQD": 6e-4, "USO": 1e-3,
 }
-DEFAULT_SPREAD: float = 8e-4   # fallback for unlisted tickers
-COMMISSION: float = 5e-4       # 5 bps round-trip commission
-
-
-@dataclass
-class BacktestConfig:
-    """Parameters controlling the walk-forward backtest."""
-    start_date: str = "2020-01-01"
-    end_date: str = "2024-12-31"
-    initial_capital: float = 1_000_000
-    train_window: int = 504        # ~2 years of trading days
-    rebalance_freq: str = "ME"     # month-end rebalancing
-    run_ablation: bool = True      # compare ML+BL vs BL-only
-
-
-@dataclass
-class MLConfig:
-    """ML ensemble and feature-engineering parameters."""
-    horizon: int = 21              # forward-return prediction horizon (trading days)
-    n_cv_splits: int = 5           # TimeSeriesSplit folds
-    min_train_obs: int = 100       # minimum samples required to train
-    rf_n_estimators: int = 200
-    rf_max_depth: int = 8
-    rf_min_samples_split: int = 15
-    rf_max_features: float = 0.5
-    gbr_n_estimators: int = 150
-    gbr_max_depth: int = 4
-    gbr_learning_rate: float = 0.05
-    gbr_subsample: float = 0.8
-    svr_c: float = 0.5
-    svr_epsilon: float = 0.05
-    ridge_alpha: float = 1.0
-    meta_ridge_alpha: float = 0.5
-
-
-@dataclass
-class OptimizerConfig:
-    """Portfolio optimisation parameters."""
-    risk_aversion: float = 2.5     # λ in MV objective
-    risk_free_rate: float = 0.04   # annualised
-    max_weight: float = 0.30       # per-asset upper bound
-    view_confidence: float = 0.65  # BL view confidence ∈ (0, 1)
-    cvar_alpha: float = 0.05       # CVaR tail probability
-    regime_vol_pct: float = 75.0   # percentile threshold for high-vol regime
+DEFAULT_HALF_SPREAD: float = 8e-4
+COMMISSION: float = 5e-4
 
 
 @dataclass
 class Config:
-    """Top-level config object; compose sub-configs here."""
-    backtest: BacktestConfig = field(default_factory=BacktestConfig)
-    ml: MLConfig = field(default_factory=MLConfig)
-    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
-    universe: List[str] = field(default_factory=lambda: UNIVERSE)
+    start: str = "1990-07-02"        # first day with the Developed ex US series
+    end: str = "2026-09-30"          # last day in the Ken French files at download time
+    universe: List[str] = field(default_factory=lambda: list(UNIVERSE))
+    cov_window: int = 504            # days for the Ledoit-Wolf covariance
+    vol_window: int = 63             # days for the volatility used to scale signals
+    min_train_months: int = 60       # labelled months required before the first ML forecast
+    carry_min_months: int = 36       # history required before a carry z-score is used
+    risk_aversion: float = 2.5
+    max_weight: float = 0.30
+    view_confidence: float = 0.65    # c in the Black-Litterman view uncertainty
+    assumed_ic: float = 0.05         # skill assumed when turning a z-score into an expected return
+    ridge_alpha: float = 100.0
+    gbm_params: Dict = field(default_factory=lambda: dict(
+        n_estimators=150, max_depth=3, learning_rate=0.03, subsample=0.8,
+        min_samples_leaf=30, random_state=SEED))
+    n_bootstrap: int = 2000
+    block: int = 21
 
 
-# Default config instance — import and override fields as needed.
 DEFAULT_CONFIG = Config()

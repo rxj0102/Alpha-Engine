@@ -1,133 +1,81 @@
+"""Data loading and features.
+
+Prices are total return indices built from free open series (FRED, Ken French
+Data Library) by src/opendata.py. A frozen copy lives in data/snapshot so that
+reruns give identical numbers; pass refresh=True to download again.
+
+Every feature is causal: its value on day t uses prices up to and including
+day t only. tests/test_data.py checks this by recomputing on truncated data.
 """
-data.py — Market data loading and feature engineering.
-
-DataEngine handles:
-  - Daily returns for open data stand ins of each ETF (FRED, Ken French
-    Data Library), converted to total return indices. No Yahoo Finance.
-  - Equal prior weights for Black-Litterman (no open market cap source)
-  - Walk-forward feature engineering (momentum, volatility, MACD, RSI, moments)
-
-[WF-1] All features are computed with an explicit cutoff_date so the
-walk-forward loop never introduces look-ahead bias.
-"""
-
-import logging
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 
-from src.opendata import PROXY_DESCRIPTIONS, proxy_prices
+from src import opendata
+from src.config import Config
 
-log = logging.getLogger(__name__)
+SNAP = Path(__file__).resolve().parents[1] / "data" / "snapshot"
+
+FEATURES = [
+    "ret_1d", "mom_5d", "mom_21d", "mom_63d", "mom_252d",
+    "vol_5d", "vol_21d", "vol_63d", "vol_252d",
+    "price_to_sma20", "sma20_to_sma50", "macd", "macd_hist", "bb_width", "rsi",
+    "ret_mean_63d", "ret_skew_63d", "ret_kurt_63d",
+]
 
 
-class DataEngine:
-    """Loads open data prices, prior weights, and engineers per-asset features."""
+def load_panel(cfg: Config, refresh: bool = False) -> Dict[str, pd.DataFrame]:
+    """Return prices, the daily risk-free rate and the yields used for bond carry."""
+    files = {k: SNAP / f"{k}.csv" for k in ("prices", "rf", "yields")}
+    if refresh or not all(p.exists() for p in files.values()):
+        SNAP.mkdir(parents=True, exist_ok=True)
+        prices = opendata.proxy_prices(cfg.universe, cfg.start, cfg.end)
+        rf = opendata.french("F-F_Research_Data_Factors_daily")["RF"].reindex(prices.index).ffill()
+        yields = opendata.fred(["DGS7", "DGS10", "DGS20", "DBAA"]).reindex(prices.index).ffill(limit=5)
+        prices.to_csv(files["prices"], float_format="%.6f", index_label="Date")
+        rf.to_frame("RF").to_csv(files["rf"], float_format="%.6f", index_label="Date")
+        yields.to_csv(files["yields"], float_format="%.4f", index_label="Date")
+    read = lambda p: pd.read_csv(p, index_col="Date", parse_dates=True)
+    prices = read(files["prices"])[cfg.universe].loc[cfg.start:cfg.end]
+    return {"prices": prices,
+            "rf": read(files["rf"])["RF"].reindex(prices.index),
+            "yields": read(files["yields"]).reindex(prices.index)}
 
-    def __init__(self, start_date: str, end_date: str) -> None:
-        self.start_date = start_date
-        self.end_date = end_date
-        self.data: Dict = {}
 
-    # ── Public API ─────────────────────────────────────────────────────────
+def asset_features(p: pd.Series) -> pd.DataFrame:
+    """The 18 technical features for one price series. Scale free and causal."""
+    r = p.pct_change()
+    f = pd.DataFrame(index=p.index)
+    f["ret_1d"] = r
+    for n in (5, 21, 63, 252):
+        f[f"mom_{n}d"] = p.pct_change(n)
+        f[f"vol_{n}d"] = r.rolling(n).std() * np.sqrt(252)
+    sma20, sma50 = p.rolling(20).mean(), p.rolling(50).mean()
+    f["price_to_sma20"] = p / sma20 - 1
+    f["sma20_to_sma50"] = sma20 / sma50 - 1
+    macd = p.ewm(span=12, adjust=False).mean() - p.ewm(span=26, adjust=False).mean()
+    # divided by price so the value does not depend on the index level
+    f["macd"] = macd / p
+    f["macd_hist"] = (macd - macd.ewm(span=9, adjust=False).mean()) / p
+    f["bb_width"] = 4 * p.rolling(20).std() / sma20
+    gain = r.where(r > 0, 0.0).ewm(com=13, adjust=False).mean()
+    loss = (-r.where(r < 0, 0.0)).ewm(com=13, adjust=False).mean()
+    f["rsi"] = 100 - 100 / (1 + gain / loss.replace(0, np.nan))
+    f["ret_mean_63d"] = r.rolling(63).mean()
+    f["ret_skew_63d"] = r.rolling(63).skew()
+    f["ret_kurt_63d"] = r.rolling(63).kurt()
+    # ewm features have no built in warm up; blank them until a year of data exists
+    f[p.notna().cumsum() < 253] = np.nan
+    return f[FEATURES]
 
-    def fetch_universe(self, tickers: List[str]) -> pd.DataFrame:
-        """
-        Build a total return index for each ticker from its open data stand in.
 
-        See src/opendata.py PROXY_DESCRIPTIONS for the series behind each
-        ticker. Tickers without an open daily source are dropped.
+def all_features(prices: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    return {t: asset_features(prices[t]) for t in prices.columns}
 
-        Returns
-        -------
-        pd.DataFrame
-            Date-indexed price matrix, columns = tickers.
-        """
-        log.info("Loading %d assets from open data …", len(tickers))
-        df = proxy_prices(tickers, self.start_date, self.end_date)
-        for t in df.columns:
-            log.info("  %s: %d obs (%s)", t, df[t].notna().sum(), PROXY_DESCRIPTIONS.get(t, ""))
-        if df.empty:
-            raise RuntimeError("No price data loaded; check tickers and date range.")
-        df = df.dropna(how="all").ffill(limit=5)
-        self.data["prices"] = df
-        return df
 
-    def fetch_market_caps(self, tickers: List[str]) -> pd.Series:
-        """
-        Black-Litterman prior weights.
-
-        There is no free open source for ETF AUM, so the prior is equal
-        weight across the tickers that have data.
-        """
-        return pd.Series(1.0, index=tickers)
-
-    def engineer_features(self, cutoff_date: Optional[str] = None) -> Dict[str, pd.DataFrame]:
-        """
-        Compute an 18-factor feature set per asset.
-
-        Factors
-        -------
-        - Momentum        : 5 / 21 / 63 / 252-day returns
-        - Realised vol    : 5 / 21 / 63 / 252-day annualised std
-        - Trend           : price-to-SMA20, SMA20-to-SMA50
-        - MACD            : signal line and histogram
-        - Bollinger width : 2σ / SMA20 normalised spread
-        - Wilder RSI      : com=13 ≡ span=27
-        - Rolling moments : 63d mean, skewness, excess kurtosis
-
-        Parameters
-        ----------
-        cutoff_date : str, optional
-            [WF-1] Upper date bound. When provided (inside the walk-forward loop)
-            features are built only from data available at that date,
-            eliminating any look-ahead bias.
-
-        Returns
-        -------
-        dict[str, pd.DataFrame]
-            Ticker → DataFrame of features aligned to price dates.
-        """
-        prices = self.data["prices"]
-        if cutoff_date:
-            prices = prices.loc[:cutoff_date]
-
-        returns = prices.pct_change()
-        features: Dict[str, pd.DataFrame] = {}
-
-        for t in prices.columns:
-            p, r = prices[t], returns[t]
-            f = pd.DataFrame(index=prices.index)
-            f["price"] = p
-            f["return_1d"] = r
-
-            for period in [5, 21, 63, 252]:
-                f[f"mom_{period}d"] = p.pct_change(period)
-                f[f"vol_{period}d"] = r.rolling(period).std() * np.sqrt(252)
-
-            sma20 = p.rolling(20).mean()
-            sma50 = p.rolling(50).mean()
-            f["price_to_sma20"] = p / sma20 - 1
-            f["sma20_to_sma50"] = sma20 / sma50 - 1
-
-            ema12 = p.ewm(span=12, adjust=False).mean()
-            ema26 = p.ewm(span=26, adjust=False).mean()
-            macd = ema12 - ema26
-            f["macd"] = macd
-            f["macd_hist"] = macd - macd.ewm(span=9, adjust=False).mean()
-            f["bb_width"] = 4 * p.rolling(20).std() / sma20
-
-            # Wilder RSI: com=13 ≡ span=27, matching Wilder's original smoothing constant
-            gain = r.where(r > 0, 0.0).ewm(com=13, adjust=False).mean()
-            loss = (-r.where(r < 0, 0.0)).ewm(com=13, adjust=False).mean()
-            f["rsi"] = 100 - (100 / (1 + gain / loss.replace(0, np.nan)))
-
-            f["ret_mean_63d"] = r.rolling(63).mean()
-            f["ret_skew_63d"] = r.rolling(63).skew()
-            f["ret_kurt_63d"] = r.rolling(63).kurt()
-
-            features[t] = f
-
-        self.data["features"] = features
-        return features
+def month_ends(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """Last trading day of each month present in the index."""
+    s = pd.Series(index, index=index)
+    return pd.DatetimeIndex(s.groupby([index.year, index.month]).last().values)

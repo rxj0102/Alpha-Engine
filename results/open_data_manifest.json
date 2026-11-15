@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-11-14T18:02:20Z",
+  "generated_utc": "2026-11-15T04:15:50Z",
   "sources": {
     "fred": "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}",
     "french": "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip",
@@ -36,6 +36,13 @@
       "bytes": 262660,
       "rows": 16923,
       "first": "1962-01-02",
+      "last": "2026-11-12"
+    },
+    "fred_DGS7.csv": {
+      "sha256": "33b404b02b97ae980a36d245dd58b28c1a0c587cf00e5fc8fe9ae15a841e63c4",
+      "bytes": 238411,
+      "rows": 14968,
+      "first": "1969-07-01",
       "last": "2026-11-12"
     },
     "fred_NASDAQ100.csv": {

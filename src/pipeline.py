@@ -1,334 +1,132 @@
+"""The experiment: one portfolio construction, several sources of views.
+
+Every strategy uses the same universe, month-end rebalance dates, covariance,
+Black-Litterman prior, optimiser and trading costs. Only the views differ:
+
+  1/N                 no views (this is the prior portfolio)
+  Inverse volatility  no forecasts, weights proportional to 1 / volatility
+  Momentum            12-1 risk-adjusted momentum, ranked across the 13 assets
+  Carry (bonds)       bond carry and roll-down against its own history, 3 bond assets only
+  Momentum + carry    average of the two scores
+  ML                  pooled ridge and gradient boosting ensemble on 18 technical features
+
+A score z becomes a view through alpha = IC * vol * z with the same assumed IC
+for every signal, so no signal is given more weight than another by construction.
 """
-pipeline.py — Walk-forward orchestration of the full Alpha Engine pipeline.
-
-Pipeline stages per rebalance date
-------------------------------------
-A. Feature engineering  — cutoff_date prevents look-ahead bias [WF-1]
-B. ML alpha             — per-asset IC; only IC > 0 views forwarded to BL
-C. Volatility (GARCH)   — per-asset regime; majority-vote portfolio regime
-D. BL optimisation      — MV (low-vol) or Min-CVaR (high-vol) with ML views
-E. Ablation             — BL-only (no ML views) for attribution analysis
-
-Outputs
--------
-A dict containing:
-  - backtester         : PortfolioBacktester instance (fitted)
-  - metrics            : strategy performance dict
-  - ablation_metrics   : BL-only performance dict
-  - weights_history    : pd.DataFrame of full-period weight snapshots
-  - ml_metrics         : per-asset IC / R² / calibration
-  - ic_history         : per-asset IC time series across rebalances
-  - spy_returns        : SPY daily return series (benchmark)
-  - prices             : full price DataFrame
-  - common_tickers     : tickers with complete price data
-  - port_rets          : daily strategy return series
-  - eval_start         : first rebalance date; all comparisons start after it
-  - comparison         : DataFrame of ML+BL, BL-only, 1/N and SPY metrics on
-                         the evaluation window and each half of it
-"""
-
-import math
-import logging
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from src.backtest import PortfolioBacktester, StatisticalTests, comparison_table
-from src.config import Config, DEFAULT_CONFIG
-from src.data import DataEngine
-from src.ml_alpha import MLAlphaEngine
-from src.optimizer import BlackLittermanOptimizer
-from src.volatility import VolatilityEngine
+from src import backtest as bt
+from src import ml_alpha, optimizer, signals
+from src.config import BONDS, Config, DEFAULT_CONFIG
+from src.data import all_features, load_panel, month_ends
 
-log = logging.getLogger(__name__)
-
-
-def min_assets(max_weight: float) -> int:
-    """Smallest universe for which sum(w) = 1, 0 <= w <= max_weight is feasible."""
-    return max(3, math.ceil(1.0 / max_weight - 1e-9))
+FORECAST_STRATEGIES = ["Momentum", "Carry (bonds)", "Momentum + carry", "ML"]
+STRATEGIES = ["1/N", "Inverse volatility"] + FORECAST_STRATEGIES
+MARKET = "US market"
+CLASSES = {"equity": ["SPY", "QQQ", "IWM", "EFA", "XLF", "XLE", "XLK", "XLV", "XLI"],
+           "bonds": BONDS, "oil": ["USO"]}
 
 
-def run_walk_forward(cfg: Config = None) -> Dict:
-    """
-    Execute the full walk-forward Alpha Engine pipeline.
+def build_scores(cfg: Config, panel: Dict, verbose: bool = False) -> Dict:
+    """Signals and forecasts for every rebalance date, all lagged one day."""
+    prices = panel["prices"]
+    idx = prices.index
+    vol = signals.realised_vol(prices, cfg.vol_window)
+    reb = month_ends(idx)
+    reb = reb[idx.get_indexer(reb) >= 260]
+    prev = idx[idx.get_indexer(reb) - 1]
 
-    Parameters
-    ----------
-    cfg : Config, optional
-        Override any parameters via Config / sub-configs.
-        Defaults to DEFAULT_CONFIG (see src/config.py).
+    X, y, fwd = ml_alpha.build_panel(all_features(prices), prices, vol, reb)
+    fc = ml_alpha.walk_forward(X, y, cfg, verbose=verbose)
 
-    Returns
-    -------
-    dict
-        All artefacts from the run (backtester, metrics, weights, etc.).
-        See module docstring for full key list.
-    """
-    cfg = cfg or DEFAULT_CONFIG
-    bc = cfg.backtest
-    ml_cfg = cfg.ml
-    opt_cfg = cfg.optimizer
-    universe: List[str] = cfg.universe
+    mom = signals.momentum(prices).loc[prev]
+    mom.index = reb
+    z_mom = mom.apply(signals.xs_zscore, axis=1)
 
-    print(f"\n{'='*70}")
-    print("  WALK-FORWARD ALPHA ENGINE")
-    print(f"{'='*70}")
-    print(f"Universe: {len(universe)} assets | Window: {bc.train_window}d | Freq: {bc.rebalance_freq}")
+    carry = signals.bond_carry(panel["yields"], panel["rf"]).loc[prev]
+    carry.index = reb
+    z_carry = pd.DataFrame({d: signals.ts_zscore(carry.iloc[: k + 1], cfg.carry_min_months)
+                            for k, d in enumerate(reb)}).T[BONDS]
 
-    # ── Stage 0: Data ──────────────────────────────────────────────────────
-    data_eng = DataEngine(bc.start_date, bc.end_date)
-    prices = data_eng.fetch_universe(universe)
-    market_caps = data_eng.fetch_market_caps(universe)
-    returns = prices.pct_change().dropna()
-    print(f"Loaded: {len(prices)} trading days, {prices.shape[1]} assets")
+    first_ml = fc.index.get_level_values("date").min()
+    first_carry = z_carry.dropna().index.min()
+    eval_start = max(first_ml, first_carry)
+    return {"reb": reb, "prev": prev, "vol": vol, "X": X, "y": y, "fwd": fwd, "forecasts": fc,
+            "z_mom": z_mom, "carry": carry, "z_carry": z_carry, "eval_start": eval_start}
 
-    # ── Rebalance schedule (aligned to actual trading days) ────────────────
-    reb_raw = pd.date_range(prices.index[bc.train_window], prices.index[-1], freq=bc.rebalance_freq)
-    reb_dates = pd.DatetimeIndex(sorted(set(
-        prices.index[min(prices.index.searchsorted(d), len(prices) - 1)]
-        for d in reb_raw
-        if prices.index.searchsorted(d) >= bc.train_window
-    )))
-    print(f"Rebalance schedule: {len(reb_dates)} periods")
 
-    # ── Walk-forward loop ──────────────────────────────────────────────────
-    weights_record: Dict = {}
-    ablation_record: Dict = {}
-    ml_metrics_all: Dict = {}
-    ic_history: Dict[str, list] = {t: [] for t in universe}
-    live_preds: Dict = {}  # reb_date -> {ticker: forecast}, for the live cross-sectional IC
-    # Latest metrics for every trained asset, not only those passing the IC gate;
-    # testing only the gated assets would select on the outcome.
-    latest_ic_all: Dict = {}
+def scores_for(name: str, d: pd.Timestamp, sc: Dict) -> Optional[pd.Series]:
+    """The z-score vector a strategy uses on date d (None for strategies without views)."""
+    if name == "Momentum":
+        return sc["z_mom"].loc[d].dropna()
+    if name == "Carry (bonds)":
+        return sc["z_carry"].loc[d].dropna()
+    if name == "Momentum + carry":
+        return signals.combine([sc["z_mom"].loc[d], sc["z_carry"].loc[d]]).dropna()
+    if name == "ML":
+        return sc["forecasts"]["ensemble"].xs(d, level="date").dropna()
+    return None
 
-    for i, reb_date in enumerate(reb_dates):
-        loc = prices.index.get_loc(reb_date)
-        start_loc = max(0, loc - bc.train_window)
 
-        train_prices = prices.iloc[start_loc:loc]
-        train_returns = returns.iloc[start_loc:loc]
-        n_obs = len(train_returns)
-
-        if n_obs < 252:
+def build_weights(cfg: Config, panel: Dict, sc: Dict, assumed_ic: Optional[float] = None,
+                  names: Optional[List[str]] = None, cache: Optional[Dict] = None) -> Dict[str, pd.DataFrame]:
+    """Target weights per strategy on every rebalance date from eval_start."""
+    prices = panel["prices"]
+    rets = prices.pct_change()
+    idx = prices.index
+    ic = cfg.assumed_ic if assumed_ic is None else assumed_ic
+    names = names or STRATEGIES
+    cache = {} if cache is None else cache
+    out = {n: {} for n in names}
+    for d, p in zip(sc["reb"], sc["prev"]):
+        if d < sc["eval_start"]:
             continue
-
-        print(f"  [{i+1}/{len(reb_dates)}] {reb_date.date()} (n={n_obs})", end="  ")
-
-        # A. Features — restrict to data available up to reb_date [WF-1]
-        data_eng.data["prices"] = train_prices
-        feat_dict = data_eng.engineer_features(cutoff_date=str(reb_date.date()))
-        data_eng.data["prices"] = prices  # restore full price history
-
-        # B. ML alpha — train per asset, keep views where IC > 0
-        ml_eng = MLAlphaEngine(cfg=ml_cfg)
-        ml_views: Dict[str, float] = {}
-
-        for t in universe:
-            if t not in feat_dict:
-                continue
-            X, y = ml_eng.prepare_data(feat_dict[t].dropna(), horizon=ml_cfg.horizon)
-            if len(X) < ml_cfg.min_train_obs:
-                continue
-            try:
-                m = ml_eng.train(X, y, t)
-                ic_history[t].append(m["IC"])
-                pred = float(ml_eng.predict(X.iloc[-1:], t)[0])
-                live_preds.setdefault(reb_date, {})[t] = pred
-                latest_ic_all[t] = m
-                ml_metrics_all[t] = m  # every asset, not only IC > 0 (selection bias)
-                if m["IC"] > 0:
-                    ml_views[t] = pred
-            except Exception:
-                pass
-
-        # C. GJR-GARCH vol forecasts and regime detection
-        vol_eng = VolatilityEngine()
-        regimes: Dict[str, str] = {}
-
-        for t in list(ml_views.keys()):
-            if t not in train_returns.columns:
-                continue
-            try:
-                if vol_eng.fit(train_returns[t], t) is None:
-                    continue
-                vol_eng.forecast(t, horizon=5)
-                regimes[t] = vol_eng.regime(t, pct=opt_cfg.regime_vol_pct)
-            except Exception:
-                pass
-
-        if regimes:
-            n_high = sum(r == "high_vol" for r in regimes.values())
-            portfolio_regime = "high_vol" if n_high > len(regimes) / 2 else "low_vol"
-        else:
-            portfolio_regime = "low_vol"
-
-        # D. BL optimisation
-        selected = [t for t in ml_views if t in train_returns.columns]
-
-        def _optimize(use_ml_views: bool) -> pd.Series:
-            # Fully invested with every weight <= max_weight needs at least
-            # ceil(1 / max_weight) assets; with 3 assets and a 30% cap the
-            # problem is infeasible and the solver fell back to 33% each.
-            if len(selected) < min_assets(opt_cfg.max_weight):
-                return pd.Series(1 / len(universe), index=universe)
-            try:
-                bl = BlackLittermanOptimizer(cfg=opt_cfg)
-                tr = train_returns[selected].dropna()
-                mc = market_caps.reindex(selected).fillna(market_caps.median())
-                eq, cov = bl.equilibrium(tr, mc)
-
-                mu = (
-                    bl.posterior(eq, cov, ml_views, n_obs=n_obs)
-                    if use_ml_views else eq
-                )
-                wts = (
-                    bl.optimize_min_cvar(tr, max_weight=opt_cfg.max_weight)
-                    if portfolio_regime == "high_vol"
-                    else bl.optimize_mv(mu, cov, max_weight=opt_cfg.max_weight,
-                                        regime=portfolio_regime)
-                )
-                wts = wts.reindex(universe).fillna(0)
-                return wts / wts.sum() if wts.sum() > 0 else pd.Series(1 / len(universe), index=universe)
-
-            except Exception as exc:
-                log.warning("Optimisation failed: %s → equal weights", exc)
-                return pd.Series(1 / len(universe), index=universe)
-
-        wts = _optimize(use_ml_views=True)
-        weights_record[reb_date] = wts
-        if bc.run_ablation:
-            ablation_record[reb_date] = _optimize(use_ml_views=False)
-
-        top3 = wts[wts > 0.01].nlargest(3)
-        print(
-            f"regime={portfolio_regime}  views={len(ml_views)}  "
-            f"top=[{', '.join(f'{t}:{v:.0%}' for t, v in top3.items())}]"
-        )
-
-    if not weights_record:
-        raise RuntimeError("No weight snapshots — check data quality and date range.")
-
-    def _assemble(record: Dict) -> pd.DataFrame:
-        eq = 1 / len(universe)
-        wh = pd.DataFrame(record).T.reindex(prices.index).ffill()
-        fvi = wh.first_valid_index()
-        if fvi:
-            wh.loc[wh.index < fvi] = eq
-        return wh.fillna(eq)
-
-    weights_history = _assemble(weights_record)
-    common_tickers = [t for t in universe if t in prices.columns]
-
-    # ── Backtest ───────────────────────────────────────────────────────────
-    print("\nRunning backtest …")
-    bt = PortfolioBacktester(bc.initial_capital, opt_cfg.risk_free_rate)
-    ph = bt.run(prices[common_tickers], weights_history[common_tickers], bc.rebalance_freq)
-    spy = prices["SPY"].pct_change() if "SPY" in prices.columns else None
-    m = bt.metrics(spy)
-
-    print("\n" + "=" * 55)
-    print("  PERFORMANCE SUMMARY — ML + BL STRATEGY")
-    print("=" * 55)
-    for k, v in m.items():
-        print(f"  {k:<35} {v}")
-
-    # ── Ablation: BL-only ──────────────────────────────────────────────────
-    ablation_metrics: Dict = {}
-    if bc.run_ablation and ablation_record:
-        abl_wh = _assemble(ablation_record)
-        abl_bt = PortfolioBacktester(bc.initial_capital, opt_cfg.risk_free_rate)
-        abl_bt.run(prices[common_tickers], abl_wh[common_tickers], bc.rebalance_freq)
-        ablation_metrics = abl_bt.metrics(spy)
-        print("\n  ABLATION — BL-only (no ML views)")
-        for k, v in ablation_metrics.items():
-            print(f"  {k:<35} {v:>12}  (ML+BL: {m.get(k, '—'):>12})")
-
-    # ── 1/N baseline and like-for-like comparison ─────────────────────────
-    # Weights before the first rebalance are a 1/N placeholder, so every
-    # strategy is evaluated only after eval_start. 1/N uses the same
-    # universe, rebalance schedule and cost model as the strategy.
-    eval_start = min(weights_record)
-    ew = pd.DataFrame(1 / len(common_tickers), index=prices.index, columns=common_tickers)
-    ew_bt = PortfolioBacktester(bc.initial_capital, opt_cfg.risk_free_rate)
-    ew_ph = ew_bt.run(prices[common_tickers], ew, bc.rebalance_freq)
-    rets = {
-        "ML + BL": ph["portfolio_value"].pct_change(),
-        "1/N equal weight": ew_ph["portfolio_value"].pct_change(),
-    }
-    if bc.run_ablation and ablation_record:
-        rets["BL only"] = abl_bt.portfolio_history["portfolio_value"].pct_change()
-    if spy is not None:
-        rets["US market (SPY stand-in)"] = spy
-    comparison = comparison_table(rets, opt_cfg.risk_free_rate, spy,
-                                  start=eval_start, end=prices.index[-1])
-    print(f"\n  Comparison from first rebalance ({eval_start.date()}):")
-    print(comparison[comparison.window == "full"].to_string(index=False))
-
-    # ── Statistical validation ─────────────────────────────────────────────
-    port_rets = ph["portfolio_value"].pct_change().dropna()
-    port_rets = port_rets[port_rets.index > eval_start]
-    StatisticalTests.report(ph[ph.index >= eval_start], ml_metrics_all, n_trials=max(len(ml_metrics_all), 1),
-                            rf=opt_cfg.risk_free_rate)
-
-    # Live cross-sectional IC: at each rebalance, rank correlation across assets
-    # between the forecast made with data up to that date and the realised
-    # forward return over the next `horizon` trading days. Monthly rebalances
-    # with a 21-day horizon give non-overlapping windows.
-    live_ic = StatisticalTests.live_cross_sectional_ic(live_preds, prices, ml_cfg.horizon)
-    lic = StatisticalTests.ic_significance(live_ic)
-    print("\n  Live cross-sectional IC (one value per rebalance, non-overlapping):")
-    if "error" not in lic:
-        print(f"    n={len(live_ic.dropna())}  mean_IC={lic['mean_IC']:.3f}  ICIR={lic['ICIR']:.2f}  "
-              f"t={lic['t_stat']:.2f}  p={lic['p_value']:.3f}")
-
-    print("\n  Per-asset in-training OOF IC (pooled time series, overlapping labels; diagnostic only):")
-    for t, ics in ic_history.items():
-        if len(ics) >= 5:
-            # Consecutive fits share all but one month of the training window.
-            r = StatisticalTests.ic_significance(
-                pd.Series(ics), hac_lags=bc.train_window // 21
-            )
-            if "error" not in r:
-                sig = "✓" if r["significant_5pct"] else "✗"
-                print(
-                    f"    {t:<6} mean_IC={r['mean_IC']:.3f}  "
-                    f"ICIR={r['ICIR']:.2f}  p={r['p_value']:.3f}  {sig}"
-                )
-
-    return {
-        "backtester": bt,
-        "metrics": m,
-        "ablation_metrics": ablation_metrics,
-        "weights_history": weights_history,
-        "ml_metrics": ml_metrics_all,
-        "ic_history": ic_history,
-        "spy_returns": spy,
-        "prices": prices,
-        "common_tickers": common_tickers,
-        "port_rets": port_rets,
-        "live_ic": live_ic,
-        "live_ic_stats": lic,
-
-        "eval_start": eval_start,
-        "comparison": comparison,
-    }
+        if d not in cache:
+            loc = idx.get_loc(d)
+            cov = optimizer.ledoit_wolf_cov(rets.iloc[loc - cfg.cov_window: loc])
+            cache[d] = (cov, optimizer.equilibrium(cov, cfg.risk_aversion))
+        cov, pi = cache[d]
+        v = sc["vol"].loc[p]
+        for n in names:
+            if n == "1/N":
+                w = pd.Series(1.0 / len(pi), index=pi.index)
+            elif n == "Inverse volatility":
+                w = (1.0 / v) / (1.0 / v).sum()
+            else:
+                alpha = signals.alpha_from_z(scores_for(n, d, sc), v, ic)
+                mu = optimizer.posterior(pi, cov, pi.reindex(alpha.index) + alpha, cfg.view_confidence)
+                w = optimizer.optimize_mv(mu, cov, cfg.risk_aversion, cfg.max_weight)
+            out[n][d] = w
+    return {n: pd.DataFrame(w).T[list(prices.columns)] for n, w in out.items()}
 
 
-if __name__ == "__main__":
-    import json
-    from pathlib import Path
+def run_experiment(cfg: Config = None, refresh: bool = False, verbose: bool = True) -> Dict:
+    cfg = cfg or DEFAULT_CONFIG
+    panel = load_panel(cfg, refresh=refresh)
+    prices, rf = panel["prices"], panel["rf"]
+    if verbose:
+        print(f"data {prices.index[0].date()} to {prices.index[-1].date()}, {prices.shape[1]} assets")
+    sc = build_scores(cfg, panel, verbose=verbose)
+    if verbose:
+        print(f"first out-of-sample rebalance {sc['eval_start'].date()}")
+    cache: Dict = {}
+    weights = build_weights(cfg, panel, sc, cache=cache)
+    px = prices.ffill()
+    runs = {n: bt.backtest(px, w) for n, w in weights.items()}
+    returns = pd.DataFrame({n: r["returns"] for n, r in runs.items()})
+    returns[MARKET] = px["SPY"].pct_change().reindex(returns.index)
 
-    logging.basicConfig(level=logging.WARNING)
-    out = Path("outputs")
-    out.mkdir(exist_ok=True)
-    res = run_walk_forward()
-    res["comparison"].to_csv(out / "comparison.csv", index=False)
-    with open(out / "run_summary.json", "w") as fh:
-        json.dump({
-            "eval_start": str(res["eval_start"].date()),
-            "data_end": str(res["prices"].index[-1].date()),
-            "n_rebalances": int(len(res["weights_history"].drop_duplicates())),
-            "risk_free_rate": DEFAULT_CONFIG.optimizer.risk_free_rate,
-        }, fh, indent=2)
-    print("Wrote outputs/comparison.csv and outputs/run_summary.json")
+    # robustness: trading costs and the assumed skill level
+    robust = {}
+    for label, mult in (("no costs", 0.0), ("double costs", 2.0)):
+        robust[label] = {n: bt.backtest(px, weights[n], cost_mult=mult)["returns"]
+                         for n in ["1/N"] + FORECAST_STRATEGIES}
+    for label, ic in (("assumed IC 0.025", 0.025), ("assumed IC 0.10", 0.10)):
+        w2 = build_weights(cfg, panel, sc, assumed_ic=ic, names=FORECAST_STRATEGIES, cache=cache)
+        robust[label] = {n: bt.backtest(px, w2[n])["returns"] for n in FORECAST_STRATEGIES}
+
+    return {"cfg": cfg, "panel": panel, "scores": sc, "weights": weights, "returns": returns,
+            "turnover": {n: r["turnover"] for n, r in runs.items()}, "robust": robust, "rf": rf}

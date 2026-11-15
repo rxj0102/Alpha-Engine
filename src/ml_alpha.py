@@ -1,283 +1,82 @@
+"""Pooled cross-sectional return forecasts.
+
+One model is fitted on every asset and month at once. Each row is an asset on a
+month-end; features are ranked across assets on that date; the target is next
+month's return, divided by volatility and measured relative to the average
+asset. Pooling matters because one asset alone gives 12 non-overlapping monthly
+observations a year, far too few for a non-linear model.
+
+Walk-forward protocol for the forecast traded at month-end k:
+  features    data up to the day before month-end k
+  training    rows 0 .. k-2 (row k-1 is left out because its label, the return
+              over month k-1 to k, is only complete at the close we trade on)
+  models      ridge and gradient boosting with fixed hyperparameters, no tuning
+  ensemble    mean of the two forecasts after a cross-sectional z-score
 """
-ml_alpha.py — Stacked ensemble for cross-sectional return forecasting.
-
-Why stacking?
--------------
-Individual base learners capture different signal structures:
-  - RandomForest    : non-linear interactions, robust to outliers
-  - GradientBoosting: sequential error correction, captures momentum regime-switching
-  - SVR (RBF)       : large-margin regression, effective on standardised features
-  - Ridge           : linear baseline, low variance, high interpretability
-
-No single model dominates across market regimes. The Ridge meta-learner learns
-the optimal convex combination from OOF predictions — equivalent to an
-empirical Bayes estimate of the mixing weights.
-
-Two-stage protocol [ML-1]
---------------------------
-The naive stacking approach trains the meta-learner on in-sample base predictions,
-which makes it learn to correct in-sample base-model residuals (a form of
-overfitting). The fix:
-
-  Stage 1 (evaluation): TimeSeriesSplit OOF cross-validation
-    - Each fold trains base models on past data, predicts on future data
-    - Meta-learner trained on these OOF predictions → IC is unbiased
-    - Per-fold StandardScaler prevents any cross-fold leakage
-
-  Stage 2 (deployment): Full refit on the entire training window
-    - Base models retrained on all T observations
-    - Meta-learner retrained on base predictions from the same T observations
-    - This guarantees the deployed model matches the one evaluated in Stage 1
-
-Without Stage 2, we would deploy models trained on ~80% of data (last CV fold),
-creating a systematic discrepancy between reported IC and actual IC.
-
-Information Coefficient and the IC filter
------------------------------------------
-IC = Spearman rank correlation (predicted vs. realised returns).
-
-Spearman is used instead of Pearson because:
-  (a) It is robust to extreme return observations (heavy tails)
-  (b) It measures ordinal forecasting skill — the relevant quantity for
-      cross-sectional strategies that rank assets and take long/short baskets
-
-Views are forwarded to Black-Litterman only when IC > 0 (positive predictive
-content). Negative-IC assets are omitted: their ML predictions would be
-anti-correlated with future returns, which the BL model would correctly
-interpret as a negative view — but we have low confidence in the sign of
-our signal uncertainty in those cases.
-
-ICIR = IC / σ(IC) is the per-asset signal Sharpe ratio. An ICIR > 0.5 is
-considered a strong alpha signal in industry practice.
-"""
-
-import logging
-from typing import Dict, Tuple
+from typing import Dict
 
 import numpy as np
 import pandas as pd
-from scipy import stats
-from sklearn.covariance import LedoitWolf  # noqa: F401 (re-exported for convenience)
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import Ridge
-from sklearn.metrics import r2_score
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVR
 
-from src.config import MLConfig, SEED
+from src.config import Config
+from src.data import FEATURES
+from src.signals import xs_zscore
 
-log = logging.getLogger(__name__)
+MODELS = ["ridge", "gbm", "ensemble"]
 
 
-class MLAlphaEngine:
+def build_panel(features: Dict[str, pd.DataFrame], prices: pd.DataFrame,
+                vol: pd.DataFrame, reb: pd.DatetimeIndex):
+    """Return X (ranked features), y (target) and fwd (vol-scaled next month return).
+
+    All three are indexed by (rebalance date, ticker). X uses the day before the
+    rebalance date. y is missing on the last date, which has no next month yet.
     """
-    Stacked ensemble (RF + GBM + SVR + Ridge) for cross-sectional alpha generation.
+    idx = prices.index
+    loc = idx.get_indexer(reb)
+    prev = idx[loc - 1]
+    xs, fw = [], []
+    px = prices.ffill()
+    for k, d in enumerate(reb):
+        x = pd.DataFrame({t: features[t].loc[prev[k]] for t in prices.columns}).T
+        x = x.dropna()
+        x = x.rank() / len(x) - 0.5 - 0.5 / len(x)      # centred ranks in (-0.5, 0.5)
+        x.index = pd.MultiIndex.from_product([[d], x.index], names=["date", "ticker"])
+        xs.append(x)
+        if k + 1 < len(reb):
+            r = px.iloc[loc[k + 1]] / px.iloc[loc[k]] - 1
+            f = (r / vol.loc[prev[k]]).dropna()
+            f.index = pd.MultiIndex.from_product([[d], f.index], names=["date", "ticker"])
+            fw.append(f)
+    X = pd.concat(xs)[FEATURES]
+    fwd = pd.concat(fw).rename("fwd").reindex(X.index)
+    y = (fwd - fwd.groupby(level="date").transform("mean")).rename("y")
+    return X, y, fwd
 
-    Parameters
-    ----------
-    cfg : MLConfig
-        Hyper-parameters for base learners and cross-validation.
+
+def walk_forward(X: pd.DataFrame, y: pd.Series, cfg: Config, verbose: bool = False) -> pd.DataFrame:
+    """Out-of-sample forecasts for every rebalance date with enough history.
+
+    Returns a frame indexed like X with columns ridge, gbm and ensemble (each a
+    cross-sectional z-score). Dates before the first forecast are absent.
     """
-
-    def __init__(self, cfg: MLConfig = None) -> None:
-        self.cfg = cfg or MLConfig()
-        self.models: Dict = {}
-        self.scalers: Dict = {}
-        self.feat_importance: Dict = {}
-
-    # ── Data preparation ───────────────────────────────────────────────────
-
-    def prepare_data(self, features: pd.DataFrame, horizon: int = None) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Build feature matrix X and forward-return target y.
-
-        Uses compound forward return p(t+h)/p(t) - 1 to avoid sign-flip
-        artefacts from composing multiple pct_change() values.
-
-        Parameters
-        ----------
-        features : pd.DataFrame
-            Output of DataEngine.engineer_features() for one ticker.
-        horizon : int, optional
-            Prediction horizon in trading days; defaults to cfg.horizon.
-
-        Returns
-        -------
-        X : pd.DataFrame, y : pd.Series
-            Aligned, NaN-free feature/label pairs.
-        """
-        h = horizon or self.cfg.horizon
-        p = features["price"]
-        y = (p.shift(-h) / p - 1).rename("fwd_return")
-        X = features.drop(columns=["return_1d", "price"], errors="ignore")
-        valid = X.notna().all(axis=1) & y.notna()
-        return X[valid], y[valid]
-
-    # ── Internal helpers ───────────────────────────────────────────────────
-
-    @staticmethod
-    def _ic(actuals: np.ndarray, preds: np.ndarray) -> float:
-        """
-        Information Coefficient: Spearman rank correlation(actuals, preds).
-
-        Spearman ρ = Pearson correlation of the rank-transformed series.
-        It is bounded in [-1, 1], equals 1 for perfect rank-preserving forecasts,
-        and is zero under the null of no predictive content.
-
-        Typical empirical IC values:
-          IC < 0.02  : noise (common for individual assets, noisy signals)
-          IC = 0.03–0.05 : usable alpha (industry benchmark for factor models)
-          IC > 0.10  : exceptional (or possibly overfitted — verify with DSR)
-
-        The Fundamental Law (Grinold 1989) links IC to strategy IR:
-          IR ≈ IC · √BR
-        where BR = breadth (independent bets/year). Monthly rebalancing across
-        15 assets gives BR ≈ 180, so IC = 0.04 → IR ≈ 0.54 (pre-cost).
-        """
-        return float(stats.spearmanr(actuals, preds).statistic)
-
-    def _build_base_models(self):
-        """Instantiate base learners from config."""
-        cfg = self.cfg
-        return [
-            ("rf", RandomForestRegressor(
-                n_estimators=cfg.rf_n_estimators, max_depth=cfg.rf_max_depth,
-                min_samples_split=cfg.rf_min_samples_split, max_features=cfg.rf_max_features,
-                random_state=SEED, n_jobs=-1,
-            )),
-            ("gbr", GradientBoostingRegressor(
-                n_estimators=cfg.gbr_n_estimators, max_depth=cfg.gbr_max_depth,
-                learning_rate=cfg.gbr_learning_rate, subsample=cfg.gbr_subsample,
-                random_state=SEED,
-            )),
-            ("svr", SVR(kernel="rbf", C=cfg.svr_c, epsilon=cfg.svr_epsilon, gamma="scale")),
-            ("ridge", Ridge(alpha=cfg.ridge_alpha)),
-        ]
-
-
-    def train(self, X: pd.DataFrame, y: pd.Series, ticker: str) -> Dict:
-        """
-        Two-stage walk-forward training.
-
-        Stage 1: TimeSeriesSplit OOF → unbiased IC / R² / calibration slope.
-        Stage 2: Full refit on all data → production-ready models stored in self.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Feature matrix (no NaNs).
-        y : pd.Series
-            Forward return targets.
-        ticker : str
-            Asset identifier used as the model store key.
-
-        Returns
-        -------
-        dict
-            {"IC": float, "r2": float, "calibration_slope": float}
-        """
-        n = len(X)
-        # gap=horizon purges the last h training rows, whose h-day forward-return
-        # labels overlap the start of the test fold (label leakage otherwise).
-        tscv = TimeSeriesSplit(n_splits=self.cfg.n_cv_splits, gap=self.cfg.horizon)
-        base_models = self._build_base_models()
-
-        oof = {name: np.full(n, np.nan) for name, _ in base_models}
-        actuals = np.full(n, np.nan)
-
-        # Stage 1: OOF walk-forward CV (per-fold scaling to prevent leakage)
-        folds = []
-        for train_idx, test_idx in tscv.split(X):
-            folds.append(test_idx)
-            scaler = StandardScaler()
-            Xtr_s = scaler.fit_transform(X.iloc[train_idx])
-            Xte_s = scaler.transform(X.iloc[test_idx])
-            for name, m in base_models:
-                m.fit(Xtr_s, y.iloc[train_idx])
-                oof[name][test_idx] = m.predict(Xte_s)
-            actuals[test_idx] = y.iloc[test_idx].values
-
-        # Meta-learner evaluated walk-forward too: fold k is scored by a meta
-        # model fitted only on the OOF rows of folds before k (purged by the
-        # horizon). Fitting the meta model on all OOF rows and scoring the same
-        # rows makes the second stage in-sample and inflates the reported IC.
-        base_oof = np.column_stack([oof[name] for name, _ in base_models])
-        meta_pred = np.full(n, np.nan)
-        h = self.cfg.horizon
-        for k in range(1, len(folds)):
-            test_idx = folds[k]
-            hist = np.concatenate(folds[:k])
-            hist = hist[hist < test_idx[0] - h]
-            if len(hist) < 20:
-                continue
-            sc = StandardScaler()
-            mk = Ridge(alpha=self.cfg.meta_ridge_alpha)
-            mk.fit(sc.fit_transform(base_oof[hist]), actuals[hist])
-            meta_pred[test_idx] = mk.predict(sc.transform(base_oof[test_idx]))
-
-        valid = ~np.isnan(meta_pred)
-        meta_y_oof = actuals[valid]
-        oof_preds = meta_pred[valid]
-
-        meta_y_eval = meta_y_oof
-
-        # IC on non-overlapping rows only. Consecutive h-day forward returns
-        # share h-1 days, so a Spearman over every row of two smooth series is
-        # badly inflated: on pure random walks it averaged |IC| = 0.28 here.
-        step = max(1, h)
-        ic_y, ic_p = np.asarray(meta_y_eval)[::step], np.asarray(oof_preds)[::step]
-        oof_ic = self._ic(ic_y, ic_p) if len(ic_y) >= 5 else np.nan
-        oof_r2 = r2_score(meta_y_eval, oof_preds) if len(oof_preds) > 1 else np.nan
-        try:
-            cal_slope = float(np.polyfit(meta_y_eval, oof_preds, 1)[0])
-        except (np.linalg.LinAlgError, ValueError):
-            cal_slope = np.nan
-
-        # Stage 2: refit base models on all data; meta-learner on OOF predictions [ML-1]
-        final_scaler = StandardScaler()
-        Xall_s = final_scaler.fit_transform(X)
-        for name, m in base_models:
-            m.fit(Xall_s, y)
-
-        # The deployed meta-learner is fit on out-of-fold base predictions, as
-        # in sklearn's StackingRegressor. Fitting it on in-sample base
-        # predictions would reward the base model that overfits most (the
-        # random forest), which is not how the models behave at inference.
-        meta_scaler_final = StandardScaler()
-        meta_final = Ridge(alpha=self.cfg.meta_ridge_alpha)
-        ok = ~np.isnan(base_oof).any(axis=1) & ~np.isnan(actuals)
-        meta_final.fit(meta_scaler_final.fit_transform(base_oof[ok]), actuals[ok])
-
-        self.models[ticker] = {name: m for name, m in base_models}
-        self.models[ticker].update({"meta": meta_final, "meta_scaler": meta_scaler_final})
-        self.scalers[ticker] = final_scaler
-        self.feat_importance[ticker] = pd.Series(
-            dict(zip(X.columns, base_models[0][1].feature_importances_))
-        ).sort_values(ascending=False)
-
-        log.info("  %s: OOF IC=%.4f  R²=%.4f  CalSlope=%.3f", ticker, oof_ic, oof_r2, cal_slope)
-        return {"IC": oof_ic, "r2": oof_r2, "calibration_slope": cal_slope}
-
-    # ── Inference ──────────────────────────────────────────────────────────
-
-    def predict(self, X: pd.DataFrame, ticker: str) -> np.ndarray:
-        """
-        Generate return forecast for new observations.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Feature rows (must match training columns).
-        ticker : str
-            Must have been previously trained via `train()`.
-
-        Returns
-        -------
-        np.ndarray
-            Predicted forward returns (shape: [n_rows]).
-        """
-        m = self.models[ticker]
-        Xs = self.scalers[ticker].transform(X)
-        base = np.column_stack([m[name].predict(Xs) for name in ["rf", "gbr", "svr", "ridge"]])
-        return m["meta"].predict(m["meta_scaler"].transform(base))
+    dates = X.index.get_level_values("date").unique()
+    out = []
+    for k, d in enumerate(dates):
+        train_dates = dates[: max(k - 1, 0)]
+        if len(train_dates) < cfg.min_train_months:
+            continue
+        tr = X.index.get_level_values("date").isin(train_dates) & y.notna().values
+        Xt, yt, Xp = X[tr], y[tr], X.xs(d, level="date")
+        ridge = Ridge(alpha=cfg.ridge_alpha).fit(Xt, yt)
+        gbm = GradientBoostingRegressor(**cfg.gbm_params).fit(Xt, yt)
+        f = pd.DataFrame({"ridge": xs_zscore(pd.Series(ridge.predict(Xp), index=Xp.index)),
+                          "gbm": xs_zscore(pd.Series(gbm.predict(Xp), index=Xp.index))})
+        f["ensemble"] = xs_zscore(f.mean(axis=1))
+        f.index = pd.MultiIndex.from_product([[d], f.index], names=["date", "ticker"])
+        out.append(f)
+        if verbose and len(out) % 60 == 1:
+            print(f"  forecast {d.date()}  training rows {int(tr.sum())}")
+    return pd.concat(out)

@@ -200,6 +200,23 @@ def main() -> None:
 
     robust = {lab: {n: bt.summarize(r, rf)["sharpe"] for n, r in d.items()} for lab, d in res["robust"].items()}
 
+    # Partial trading (Garleanu and Pedersen 2013): each strategy trades a fixed
+    # share of the way to its target every month. The difference against 1/N is
+    # tested with the same paired bootstrap as the base case.
+    rfa = rf.reindex(rets.index).fillna(0)
+    partial = {}
+    for k, runs in res["partial"].items():
+        row = {}
+        for n, r in runs.items():
+            sm = bt.summarize(r["returns"], rf, r["turnover"])
+            row[n] = {"sharpe": sm["sharpe"], "turnover_ann": sm["turnover_ann"]}
+        for n in FORECAST_STRATEGIES:
+            d = bt.sharpe_diff_test(runs[n]["returns"] - rfa.reindex(runs[n]["returns"].index).fillna(0),
+                                    runs["1/N"]["returns"] - rfa.reindex(runs["1/N"]["returns"].index).fillna(0),
+                                    cfg.n_bootstrap, cfg.block)
+            row[n].update({"diff_vs_1n": d["diff"], "p_vs_1n": d["p_value"]})
+        partial[str(k)] = row
+
     out = ROOT / "results"
     (out / "weights").mkdir(parents=True, exist_ok=True)
     (out / "figures").mkdir(parents=True, exist_ok=True)
@@ -230,6 +247,7 @@ def main() -> None:
         "ic": ic_stats, "ic_periods": ic_periods, "ic_corr_ml_momentum": ic_corr, "score_corr_ml_momentum": score_corr,
         "carry_timing": carry_timing_test(sc, prices, rf),
         "robustness": robust,
+        "partial_trading": partial,
     })
     (out / "metrics.json").write_text(json.dumps(payload, indent=2) + "\n")
     print(json.dumps({k: payload[k] for k in ("active", "ic", "robustness")}, indent=1))

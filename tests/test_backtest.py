@@ -121,3 +121,26 @@ def test_monthly_compounding():
     r = pd.Series(0.01, index=idx)
     m = bt.monthly(r)
     np.testing.assert_allclose(m.iloc[0], 1.01 ** (idx.month == 1).sum() - 1)
+
+
+def _two_asset_market():
+    idx = pd.bdate_range("2020-01-01", periods=80)
+    rng = np.random.default_rng(0)
+    px = pd.DataFrame(np.cumprod(1 + rng.normal(0, 0.01, (80, 2)), axis=0), index=idx, columns=["SPY", "TLT"])
+    reb = idx[::20]
+    tgt = pd.DataFrame([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]], index=reb, columns=px.columns)
+    return px, tgt
+
+
+def test_partial_trading_with_rate_one_is_the_base_case():
+    px, tgt = _two_asset_market()
+    a, b = bt.backtest(px, tgt), bt.backtest(px, tgt, trade_rate=1.0)
+    assert np.allclose(a["returns"], b["returns"]) and np.allclose(a["turnover"], b["turnover"])
+
+
+def test_partial_trading_moves_part_of_the_way_and_trades_less():
+    px, tgt = _two_asset_market()
+    full, half = bt.backtest(px, tgt), bt.backtest(px, tgt, trade_rate=0.5)
+    # from all in SPY (after drift, still all in SPY) to all in TLT: half the book moves
+    assert abs(half["turnover"].iloc[0] - 0.5) < 1e-12
+    assert half["turnover"].sum() < full["turnover"].sum()

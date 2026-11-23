@@ -124,6 +124,37 @@ def render(m: dict) -> str:
     L.append("| Base case | " + " | ".join(f"{summ[n]['sharpe']:.2f}" for n in cols) + " |")
     for lab in rb:
         L.append(f"| {lab[0].upper() + lab[1:]} | " + " | ".join(f"{rb[lab][n]:.2f}" if n in rb[lab] else "same" for n in cols) + " |")
+    pt = m["partial_trading"]
+    ks = sorted(pt, key=float, reverse=True)
+    L.append("")
+    L.append("**Partial trading**: each month the portfolio moves only part of the way to its new target, "
+             "w + k (target - w), the rule of Garleanu and Pedersen (2013) with a fixed rate k. Sharpe ratio, with "
+             "turnover per year in brackets.")
+    L.append("")
+    L.append("| Trade rate k | " + " | ".join(cols) + " |")
+    L.append("|---|" + "---|" * len(cols))
+    L.append("| 1 (base case) | " + " | ".join(f"{summ[n]['sharpe']:.2f} ({summ[n]['turnover_ann']:.1f}x)" for n in cols) + " |")
+    for k in ks:
+        L.append(f"| {float(k):g} | " + " | ".join(f"{pt[k][n]['sharpe']:.2f} ({pt[k][n]['turnover_ann']:.1f}x)" for n in cols) + " |")
+    lo = ks[-1]
+    ml = pt[lo]["ML"]
+    checks = {
+        "partial trading cuts ML turnover by more than half": ml["turnover_ann"] < 0.5 * summ["ML"]["turnover_ann"],
+        "partial trading raises the ML Sharpe ratio": ml["sharpe"] > summ["ML"]["sharpe"],
+        "ML still trails 1/N under partial trading": all(pt[k]["ML"]["sharpe"] < pt[k]["1/N"]["sharpe"] for k in ks),
+        "no forecast strategy beats 1/N significantly under partial trading":
+            all(pt[k][n]["p_vs_1n"] > 0.05 for k in ks for n in FORECAST),
+    }
+    failed = [c for c, ok in checks.items() if not ok]
+    if failed:
+        raise SystemExit("The partial trading paragraph no longer matches the results. Failed: " + "; ".join(failed))
+    L.append("")
+    L.append(f"Trading a quarter of the way each month cuts the ML portfolio's turnover from "
+             f"{summ['ML']['turnover_ann']:.1f}x to {ml['turnover_ann']:.1f}x a year and lifts its Sharpe ratio from "
+             f"{summ['ML']['sharpe']:.2f} to {ml['sharpe']:.2f}, but 1/N gains too and ML still trails it "
+             f"(difference {ml['diff_vs_1n']:+.2f}, p = {ml['p_vs_1n']:.2f}). No forecast strategy beats 1/N at "
+             f"either rate. The rates 0.5 and 0.25 were chosen after the base case was published and both are shown; "
+             f"neither was picked from the results.")
     ct = m["carry_timing"]
     L.append("")
     L.append(f"Bond carry as a timing signal: regressing next month's volatility-scaled excess return of the three bond "

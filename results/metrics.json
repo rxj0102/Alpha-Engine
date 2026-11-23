@@ -399,5 +399,67 @@
       "Momentum + carry": 0.521363,
       "ML": 0.55184
     }
+  },
+  "partial_trading": {
+    "0.5": {
+      "1/N": {
+        "sharpe": 0.606022,
+        "turnover_ann": 0.109945
+      },
+      "Momentum": {
+        "sharpe": 0.560455,
+        "turnover_ann": 1.53136,
+        "diff_vs_1n": -0.045567,
+        "p_vs_1n": 0.618
+      },
+      "Carry (bonds)": {
+        "sharpe": 0.54651,
+        "turnover_ann": 0.579977,
+        "diff_vs_1n": -0.0595118,
+        "p_vs_1n": 0.314
+      },
+      "Momentum + carry": {
+        "sharpe": 0.557241,
+        "turnover_ann": 1.4644,
+        "diff_vs_1n": -0.048781,
+        "p_vs_1n": 0.5645
+      },
+      "ML": {
+        "sharpe": 0.572427,
+        "turnover_ann": 3.15058,
+        "diff_vs_1n": -0.0335949,
+        "p_vs_1n": 0.5705
+      }
+    },
+    "0.25": {
+      "1/N": {
+        "sharpe": 0.610571,
+        "turnover_ann": 0.0727107
+      },
+      "Momentum": {
+        "sharpe": 0.564168,
+        "turnover_ann": 0.985875,
+        "diff_vs_1n": -0.0464038,
+        "p_vs_1n": 0.581
+      },
+      "Carry (bonds)": {
+        "sharpe": 0.548734,
+        "turnover_ann": 0.374556,
+        "diff_vs_1n": -0.0618372,
+        "p_vs_1n": 0.2815
+      },
+      "Momentum + carry": {
+        "sharpe": 0.558042,
+        "turnover_ann": 0.942486,
+        "diff_vs_1n": -0.0525298,
+        "p_vs_1n": 0.4905
+      },
+      "ML": {
+        "sharpe": 0.586755,
+        "turnover_ann": 1.57213,
+        "diff_vs_1n": -0.0238166,
+        "p_vs_1n": 0.6305
+      }
+    }
   }
 }

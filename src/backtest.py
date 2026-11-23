@@ -23,7 +23,8 @@ def cost_vector(tickers, cost_mult: float = 1.0) -> np.ndarray:
     return cost_mult * np.array([HALF_SPREAD.get(t, DEFAULT_HALF_SPREAD) + COMMISSION for t in tickers])
 
 
-def backtest(prices: pd.DataFrame, targets: pd.DataFrame, cost_mult: float = 1.0) -> Dict:
+def backtest(prices: pd.DataFrame, targets: pd.DataFrame, cost_mult: float = 1.0,
+             trade_rate: float = 1.0) -> Dict:
     """Simulate a fully invested portfolio that trades to targets at the close of each target date.
 
     prices   daily total return indices without gaps
@@ -33,6 +34,12 @@ def backtest(prices: pd.DataFrame, targets: pd.DataFrame, cost_mult: float = 1.0
     day's return is earned on the old weights, then the portfolio trades and
     pays cost * |trade| out of its value. The first target date only sets up
     the portfolio, so returns start on the following day.
+
+    trade_rate k < 1 trades only part of the way: the new weights are
+    w + k * (target - w), the partial-trading rule of Garleanu and Pedersen
+    (2013) with a fixed rate. A mix of two long-only, fully invested
+    portfolios that respect the weight cap still does, so no constraint is
+    broken. The initial portfolio is set up in full.
 
     Returns daily net returns, one-way turnover per rebalance and total cost paid.
     """
@@ -51,12 +58,13 @@ def backtest(prices: pd.DataFrame, targets: pd.DataFrame, cost_mult: float = 1.0
             w = w * (1.0 + rets[i]) / gross
         day = gross - 1.0
         if d in tgt:
-            trade = np.abs(tgt[d] - w)
+            new = tgt[d] if i == 0 else w + trade_rate * (tgt[d] - w)
+            trade = np.abs(new - w)
             # setting up the initial portfolio is not charged, for any strategy
             paid = float(trade @ cost) if i > 0 else 0.0
             turnover[d] = 0.5 * float(trade.sum()) if i > 0 else np.nan
             day = (1.0 + day) * (1.0 - paid) - 1.0
-            w = tgt[d].copy()
+            w = np.array(new, dtype=float).copy()
         out[i] = day
     r = pd.Series(out, index=px.index).iloc[1:]
     to = pd.Series(turnover).dropna()

@@ -109,6 +109,16 @@ Active return is the monthly return minus the 1/N return (360 months). The Defla
 | Assumed IC 0.025 | same | 0.57 | 0.57 | 0.57 | 0.57 |
 | Assumed IC 0.10 | same | 0.51 | 0.53 | 0.52 | 0.55 |
 
+**Partial trading**: each month the portfolio moves only part of the way to its new target, w + k (target - w), the rule of Garleanu and Pedersen (2013) with a fixed rate k. Sharpe ratio, with turnover per year in brackets.
+
+| Trade rate k | 1/N | Momentum | Carry (bonds) | Momentum + carry | ML |
+|---|---|---|---|---|---|
+| 1 (base case) | 0.60 (0.2x) | 0.54 (2.6x) | 0.54 (1.0x) | 0.55 (2.5x) | 0.56 (6.7x) |
+| 0.5 | 0.61 (0.1x) | 0.56 (1.5x) | 0.55 (0.6x) | 0.56 (1.5x) | 0.57 (3.2x) |
+| 0.25 | 0.61 (0.1x) | 0.56 (1.0x) | 0.55 (0.4x) | 0.56 (0.9x) | 0.59 (1.6x) |
+
+Trading a quarter of the way each month cuts the ML portfolio's turnover from 6.7x to 1.6x a year and lifts its Sharpe ratio from 0.56 to 0.59, but 1/N gains too and ML still trails it (difference -0.02, p = 0.63). No forecast strategy beats 1/N at either rate. The rates 0.5 and 0.25 were chosen after the base case was published and both are shown; neither was picked from the results.
+
 Bond carry as a timing signal: regressing next month's volatility-scaled excess return of the three bond series on the carry z-score gives a slope of 0.083 (t = 1.76, p = 0.079, 1080 observations, standard errors clustered by month).
 <!-- results:end -->
 
@@ -120,7 +130,7 @@ Bond carry as a timing signal: regressing next month's volatility-scaled excess 
 
 **The ML signal is real but small.** Its rank IC is positive with a t-statistic above 2, and it survives two checks: it holds inside the nine equity series, where there is no bond-versus-oil tilt to learn, and a score that simply prefers low volatility assets has a lower IC that is not significant on its own. It is not reliably better than plain momentum; the difference between the two is well inside the noise. Four IC tests are shown, so the p-value of the best one should be read with that in mind.
 
-**Costs decide it.** Without costs the ML portfolio is ahead of 1/N. With costs it is behind, and with double costs it is far behind. A monthly model on fast technical features changes its mind too often for the size of its edge.
+**Costs decide it.** Without costs the ML portfolio is ahead of 1/N. With costs it is behind, and with double costs it is far behind. A monthly model on fast technical features changes its mind too often for the size of its edge. Novy-Marx and Velikov (2016) find the same pattern across equity anomalies: few strategies that turn over more than half their book a month survive costs. Trading only part of the way to each target, the standard remedy, cuts the ML turnover by three quarters and narrows the gap without closing it (table above).
 
 **The edge has faded.** Almost all of the ML skill comes from before 2010. Since then its IC has been close to zero. A full-sample average hides this, which is why the period table matters more than the headline t-statistic.
 
@@ -155,9 +165,9 @@ The sample starts in July 1990, when the Developed ex US series begins. The 20 y
 
 - The stand-ins are not tradable funds. The oil series is a spot price with no futures roll, the corporate bond series ignores defaults and downgrades, and the NASDAQ series excludes dividends. Costs from the ETF era are applied to the 1990s.
 - The prior is 1/N and nine of the 13 assets are equities, so every portfolio is equity heavy.
-- A long-only portfolio with a 30% cap can express only part of a ranking. A long-short construction would use more of it and was not tested.
+- A long-only portfolio with a 30% cap can express only part of a ranking. A long-short construction would use more of it and was not tested. Time series momentum (Moskowitz, Ooi and Pedersen 2012), the form documented across asset classes, is long-short by construction, so the momentum tested here is a weak version.
 - The model specification was fixed, not searched. Another specification could do better or worse.
-- There is no turnover control. Adding one now, after seeing that costs decide the result, would be tuning on the test sample. It is the obvious next experiment and it needs data this study has not touched.
+- The turnover control was added after the base case was published, as a check on its main explanation: partial trading at two fixed rates, both shown. Because it came after the results, a win from it would not have counted as evidence; it is reported because it could only weaken the headline, and it did not. A turnover rule chosen in advance needs data this study has not touched.
 - Carry is measured for bonds only. Equity and commodity carry need dividend forecasts and futures curves that are not in the free data.
 - Thirteen assets make a thin cross-section, so each month's IC is noisy.
 
@@ -207,9 +217,12 @@ results/           metrics.json, daily returns, monthly IC, weights, figures
 - Bailey, D. and Lopez de Prado, M. (2014). The deflated Sharpe ratio. *Journal of Portfolio Management* 40(5).
 - Black, F. and Litterman, R. (1992). Global portfolio optimization. *Financial Analysts Journal* 48(5).
 - DeMiguel, V., Garlappi, L. and Uppal, R. (2009). Optimal versus naive diversification. *Review of Financial Studies* 22(5).
+- Garleanu, N. and Pedersen, L. (2013). Dynamic trading with predictable returns and transaction costs. *Journal of Finance* 68(6).
 - Grinold, R. (1994). Alpha is volatility times IC times score. *Journal of Portfolio Management* 20(4).
 - Gu, S., Kelly, B. and Xiu, D. (2020). Empirical asset pricing via machine learning. *Review of Financial Studies* 33(5).
 - He, G. and Litterman, R. (1999). The intuition behind Black-Litterman model portfolios. Goldman Sachs Investment Management Research.
 - Koijen, R., Moskowitz, T., Pedersen, L. and Vrugt, E. (2018). Carry. *Journal of Financial Economics* 127(2).
 - Ledoit, O. and Wolf, M. (2004). A well-conditioned estimator for large-dimensional covariance matrices. *Journal of Multivariate Analysis* 88(2).
+- Moskowitz, T., Ooi, Y. H. and Pedersen, L. (2012). Time series momentum. *Journal of Financial Economics* 104(2).
+- Novy-Marx, R. and Velikov, M. (2016). A taxonomy of anomalies and their trading costs. *Review of Financial Studies* 29(1).
 - Politis, D. and Romano, J. (1992). A circular block-resampling procedure for stationary data. In *Exploring the Limits of Bootstrap*.

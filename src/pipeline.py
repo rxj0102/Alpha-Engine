@@ -25,6 +25,7 @@ from src.data import all_features, load_panel, month_ends
 
 FORECAST_STRATEGIES = ["Momentum", "Carry (bonds)", "Momentum + carry", "ML"]
 STRATEGIES = ["1/N", "Inverse volatility"] + FORECAST_STRATEGIES
+PARTIAL_RATES = (0.5, 0.25)
 MARKET = "US market"
 CLASSES = {"equity": ["SPY", "QQQ", "IWM", "EFA", "XLF", "XLE", "XLK", "XLV", "XLI"],
            "bonds": BONDS, "oil": ["USO"]}
@@ -128,5 +129,12 @@ def run_experiment(cfg: Config = None, refresh: bool = False, verbose: bool = Tr
         w2 = build_weights(cfg, panel, sc, assumed_ic=ic, names=FORECAST_STRATEGIES, cache=cache)
         robust[label] = {n: bt.backtest(px, w2[n])["returns"] for n in FORECAST_STRATEGIES}
 
+    # partial trading toward each month's target (Garleanu and Pedersen 2013),
+    # at fixed rates; the base case trades all the way
+    partial = {}
+    for k in PARTIAL_RATES:
+        partial[k] = {n: bt.backtest(px, weights[n], trade_rate=k) for n in ["1/N"] + FORECAST_STRATEGIES}
+
     return {"cfg": cfg, "panel": panel, "scores": sc, "weights": weights, "returns": returns,
-            "turnover": {n: r["turnover"] for n, r in runs.items()}, "robust": robust, "rf": rf}
+            "turnover": {n: r["turnover"] for n, r in runs.items()}, "robust": robust, "rf": rf,
+            "partial": partial}

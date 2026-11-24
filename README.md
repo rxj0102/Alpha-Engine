@@ -188,7 +188,7 @@ The sample starts in July 1990, when the Developed ex US series begins. The 20 y
 git clone https://github.com/rxj0102/Alpha-Engine.git
 cd Alpha-Engine
 uv sync                 # or: pip install -r requirements.txt
-make test               # 44 tests, a few seconds
+make test               # 46 tests, a few seconds
 make reproduce          # about 4 minutes on a laptop, rewrites results/ and this page
 make check              # confirms this page matches results/metrics.json
 ```
@@ -207,7 +207,7 @@ src/optimizer.py   Ledoit-Wolf covariance, Black-Litterman posterior, mean-varia
 src/backtest.py    backtest with costs, bootstrap tests, Deflated Sharpe Ratio, IC statistics
 src/pipeline.py    the experiment
 scripts/           reproduce.py writes results/, render_readme.py writes this page
-tests/             44 tests, including look-ahead and leakage checks
+tests/             46 tests, including look-ahead and leakage checks
 results/           metrics.json, daily returns, monthly IC, weights, figures
 ```
 
